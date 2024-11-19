@@ -145,7 +145,7 @@ def get_product_details(driver, product_url):
         logging.info(f"Successfully extracted - Name: {name}, Price: {price}, Color: {color}")
         
         return {
-            'Gender': 'Men',  # Adjust based on URL/category
+            'Gender': 'Women',  # Adjust based on URL/category
             'Name': name,
             'Color': color,
             'Description': description,
@@ -245,7 +245,7 @@ def has_more_products(driver):
         return False
 
 def scrape_versace_with_agent(start_page, agent_num):
-    base_url = 'https://www.versace.com/us/en/men/clothing/'
+    base_url = 'https://www.versace.com/us/en/women/clothing/'
     logging.info(f"Agent {agent_num}: Starting scrape from page {start_page}")
     all_products = []
     
