@@ -111,44 +111,43 @@ def get_product_details(driver, product_url):
         wait = WebDriverWait(driver, 5)
         
         # Wait for main elements to load
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-info-box")))
+        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-detail-content")))
         
-        # Get product name and price in one JavaScript call for better performance
+        # Get product details in one JavaScript call for better performance
         script = """
             return {
-                name: document.querySelector('h1.product-name.product-detail-product-name')?.textContent?.trim() || '',
-                price: document.querySelector('.price')?.textContent?.trim() || '',
-                description: document.querySelector('.product-detail > p')?.textContent?.trim() || ''
+                name: document.querySelector('h1.product-name')?.textContent?.trim() || '',
+                price: document.querySelector('.price .sales .value')?.textContent?.trim() || '',
+                color: document.querySelector('.color .display-color-name')?.textContent?.trim() || '',
+                description: document.querySelector('#product-collapsible-tabDetails')?.textContent?.trim() || ''
             }
         """
         result = driver.execute_script(script)
         
         name = result['name'] or "Name not available"
         price = result['price'] or "Price not available"
+        color = result['color'] or "Color not available"
         description = result['description'] or ""
-        
-        if not price or price == "Price not available":
-            try:
-                price_element = driver.find_element(By.CSS_SELECTOR, "input.gucciProductPrice")
-                price = f"$ {price_element.get_attribute('value')}"
-            except:
-                logging.warning(f"No price found for {product_url}")
         
         # Get all images in one go using JavaScript
         images_script = """
-            return Array.from(document.querySelectorAll('.product-detail-carousel source[data-image-size="standard-retina"]'))
-                .map(source => source.srcset)
-                .filter(srcset => srcset)
-                .map(srcset => srcset.startsWith('http') ? srcset : 'https:' + srcset);
+            return Array.from(document.querySelectorAll('.js-large-images-list .zoom-image'))
+                .map(img => img.src)
+                .filter(src => src)
+                .map(src => {
+                    // Ensure we get the highest quality image
+                    return src.replace(/sw=\d+/, 'sw=1200');
+                });
         """
         images = set(driver.execute_script(images_script))
         
         # Log successful extraction
-        logging.info(f"Successfully extracted - Name: {name}, Price: {price}")
+        logging.info(f"Successfully extracted - Name: {name}, Price: {price}, Color: {color}")
         
         return {
-            'Gender': 'Women',
+            'Gender': 'Men',  # Adjust based on URL/category
             'Name': name,
+            'Color': color,
             'Description': description,
             'Price': price,
             'Images': list(images),
@@ -172,13 +171,13 @@ def get_last_scraped_product(csv_filename):
 def scrape_products_from_page(driver, csv_filename, resume_url=None):
     """Extract products from the current page and save in real-time"""
     wait = WebDriverWait(driver, 10)
-    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "product-tiles-grid-item")))
+    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "product-tile-wrapper")))
     
-    # Get all product URLs and prices in one JavaScript call
+    # Get all product URLs in one JavaScript call
     script = """
-        return Array.from(document.querySelectorAll('.product-tiles-grid-item')).map(item => ({
-            url: item.querySelector('a.product-tiles-grid-item-link')?.href,
-            price: item.querySelector('.product-tiles-grid-item-info p.price span.sale')?.textContent?.trim()
+        return Array.from(document.querySelectorAll('.product-tile-wrapper')).map(item => ({
+            url: item.querySelector('a.back-to-product-anchor-js')?.href,
+            price: item.querySelector('.price .sales .value')?.textContent?.trim()
         })).filter(item => item.url);
     """
     products_data = driver.execute_script(script)
@@ -200,15 +199,12 @@ def scrape_products_from_page(driver, csv_filename, resume_url=None):
             logging.info(f"Scraping product {index}/{len(products_data)}")
             product = get_product_details(driver, product_data['url'])
             
-            if product and product.get('Images'):
-                # If grid price is available, use it
-                if product_data.get('price'):
-                    product['Price'] = product_data['price']
-                
+            if product:
                 # Save to CSV
                 df = pd.DataFrame([{
                     'Gender': product['Gender'],
                     'Name': product['Name'],
+                    'Color': product['Color'],
                     'Description': product['Description'],
                     'Price': product['Price'],
                     'Images': ','.join(product['Images']),
@@ -217,7 +213,7 @@ def scrape_products_from_page(driver, csv_filename, resume_url=None):
                 
                 df.to_csv(csv_filename, mode='a', header=not os.path.exists(csv_filename), index=False)
                 products.append(product)
-                logging.info(f"Scraped and saved product: {product['Name']} with price {product['Price']}")
+                logging.info(f"Scraped and saved product: {product['Name']}")
             
             # Go back to the product listing page
             driver.execute_script("window.history.go(-1)")
@@ -229,34 +225,63 @@ def scrape_products_from_page(driver, csv_filename, resume_url=None):
             
     return products
 
-def scrape_gucci_with_agent(start_page, end_page, agent_num):
-    base_url = 'https://www.gucci.com/us/en/ca/women/ready-to-wear-for-women-c-women-readytowear'
-    logging.info(f"Agent {agent_num}: Starting scrape from page {start_page} to {end_page}")
+def has_more_products(driver):
+    """Check if there's a 'load more' button and it's visible"""
+    try:
+        # Check both desktop and mobile load more buttons
+        script = """
+            const desktopBtn = document.querySelector('.desktop-load-more');
+            const mobileBtn = document.querySelector('.mobile-load-more');
+            return {
+                hasMore: !!(desktopBtn || mobileBtn),
+                isHidden: (desktopBtn?.closest('.d-none') !== null) && 
+                         (mobileBtn?.closest('.d-none') !== null)
+            };
+        """
+        result = driver.execute_script(script)
+        return result['hasMore'] and not result['isHidden']
+    except Exception as e:
+        logging.error(f"Error checking for more products: {str(e)}")
+        return False
+
+def scrape_versace_with_agent(start_page, agent_num):
+    base_url = 'https://www.versace.com/us/en/men/clothing/'
+    logging.info(f"Agent {agent_num}: Starting scrape from page {start_page}")
     all_products = []
     
     # Define CSV filename with agent number
-    csv_filename = f'gucci_products_agent_{agent_num}.csv'
+    csv_filename = f'versace_products_agent_{agent_num}.csv'
     
     try:
         driver = setup_driver()
         wait = WebDriverWait(driver, 5)
+        current_page = start_page
         
-        # Scrape assigned pages
-        for page_num in range(start_page, end_page):
-            page_url = f"{base_url}/{page_num}"
-            logging.info(f"Agent {agent_num}: Scraping products from page {page_num}: {page_url}")
-            
-            driver.get(page_url)
-            
+        # Start with initial URL
+        page_url = f"{base_url}?start={current_page * 24}"
+        driver.get(page_url)
+        
+        # Keep scraping while there are more products to load
+        while True:
             wait.until(
-                EC.presence_of_element_located((By.CLASS_NAME, "product-tiles-grid-item"))
+                EC.presence_of_element_located((By.CLASS_NAME, "product-tile-wrapper"))
             )
-            logging.info(f"Agent {agent_num}: Product grid loaded for page {page_num}")
+            logging.info(f"Agent {agent_num}: Product grid loaded for page {current_page}")
             
             products = scrape_products_from_page(driver, csv_filename)
             all_products.extend(products)
             
-            logging.info(f"Agent {agent_num}: Completed page {page_num}, total products: {len(all_products)}")
+            logging.info(f"Agent {agent_num}: Completed page {current_page}, total products: {len(all_products)}")
+            
+            # Check if there are more products to load
+            if not has_more_products(driver):
+                logging.info(f"Agent {agent_num}: No more products to load")
+                break
+                
+            # Load next page
+            current_page += 1
+            next_url = f"{base_url}?start={current_page * 24}"
+            driver.get(next_url)
             time.sleep(1)
         
         logging.info(f"Agent {agent_num}: Successfully scraped {len(all_products)} products")
@@ -279,36 +304,28 @@ def combine_csv_files(num_agents):
     dfs = []
     for i in range(num_agents):
         try:
-            df = pd.read_csv(f'gucci_products_agent_{i}.csv')
+            df = pd.read_csv(f'versace_products_agent_{i}.csv')
             dfs.append(df)
-            os.remove(f'gucci_products_agent_{i}.csv')  # Clean up individual files
+            os.remove(f'versace_products_agent_{i}.csv')  # Clean up individual files
         except FileNotFoundError:
             continue
     
     if dfs:
         combined_df = pd.concat(dfs, ignore_index=True)
-        combined_df.to_csv('gucci_products.csv', index=False)
-        logging.info(f"Combined {len(dfs)} files into gucci_products.csv")
+        combined_df.to_csv('versace_products.csv', index=False)
+        logging.info(f"Combined {len(dfs)} files into versace_products.csv")
 
-def scrape_gucci():
+def scrape_versace():
     num_agents = 4  # Number of parallel scrapers
-    total_pages = 13  # Total number of pages to scrape
     
-    # Calculate pages per agent
-    pages_per_agent = math.ceil(total_pages / num_agents)
-    
-    # Create tasks for each agent
-    tasks = []
-    for i in range(num_agents):
-        start_page = i * pages_per_agent
-        end_page = min((i + 1) * pages_per_agent, total_pages)
-        tasks.append((start_page, end_page, i))
+    # Create tasks for each agent - now just with start pages
+    tasks = [(i, i) for i in range(num_agents)]
     
     # Run agents in parallel
     with ThreadPoolExecutor(max_workers=num_agents) as executor:
         futures = [
-            executor.submit(scrape_gucci_with_agent, start, end, agent_num)
-            for start, end, agent_num in tasks
+            executor.submit(scrape_versace_with_agent, start_page, agent_num)
+            for start_page, agent_num in tasks
         ]
         
         # Wait for all agents to complete
@@ -323,6 +340,6 @@ def scrape_gucci():
 
 if __name__ == "__main__":
     try:
-        scrape_gucci()
+        scrape_versace()
     except Exception as e:
         logging.error(f"Scraping failed: {e}")
