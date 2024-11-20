@@ -18,64 +18,35 @@ import math
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def setup_driver():
-    """Set up and return a configured Chrome WebDriver with performance optimizations"""
+    """Set up and return a configured Chrome WebDriver"""
     chrome_options = Options()
     
     # Headless mode
-    chrome_options.add_argument('--headless=new')  # New headless mode for Chrome
+    # chrome_options.add_argument('--headless=new')  # Removed headless mode for debugging
     
     # Basic automation settings
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_argument('--start-maximized')
-    chrome_options.add_argument('--window-size=1920,1080')  # Set window size for headless mode
+    chrome_options.add_argument('--window-size=1920,1080')
     
     # Performance optimization arguments
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-notifications')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--disable-logging')
-    chrome_options.add_argument('--disable-infobars')
-    chrome_options.add_argument('--disable-translate')
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--no-first-run')
-    chrome_options.add_argument('--no-default-browser-check')
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--incognito')
     
-    # Additional headless optimizations
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--disable-setuid-sandbox')
-    chrome_options.add_argument('--disable-accelerated-2d-canvas')
+    # Set page load strategy to eager
+    chrome_options.page_load_strategy = 'eager'
     
-    # Memory optimization
-    chrome_options.add_argument('--disk-cache-size=0')
-    chrome_options.add_argument('--media-cache-size=0')
-    chrome_options.add_argument('--aggressive-cache-discard')
-    
-    # Page load strategy
-    chrome_options.page_load_strategy = 'eager'  # Don't wait for all resources to load
-    
-    # Preferences for performance
+    # Additional settings
     prefs = {
         'profile.default_content_setting_values.notifications': 2,
         'profile.default_content_setting_values.geolocation': 2,
-        'profile.managed_default_content_settings.images': 1,  # 2 to disable images, 1 to enable
+        'profile.managed_default_content_settings.images': 1,
         'profile.default_content_setting_values.cookies': 1,
         'profile.managed_default_content_settings.javascript': 1,
-        'profile.default_content_setting_values.plugins': 2,
-        'profile.default_content_setting_values.popups': 2,
-        'profile.default_content_setting_values.auto_select_certificate': 2,
-        'profile.default_content_setting_values.mixed_script': 2,
-        'profile.default_content_setting_values.media_stream': 2,
-        'profile.default_content_setting_values.media_stream_mic': 2,
-        'profile.default_content_setting_values.media_stream_camera': 2,
-        'profile.default_content_setting_values.protocol_handlers': 2,
-        'profile.default_content_setting_values.ppapi_broker': 2,
-        'profile.default_content_setting_values.automatic_downloads': 2,
-        'profile.default_content_settings.state.flash': 2,
+        'profile.default_content_settings.popups': 2,
+        'profile.default_content_settings.plugins': 2,
         'disk-cache-size': 4096,
         'profile.password_manager_enabled': False,
         'profile.history_enabled': False,
@@ -90,74 +61,118 @@ def setup_driver():
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
+    # Set timeouts
+    driver.set_page_load_timeout(30)
+    driver.set_script_timeout(30)
+    
     # Execute CDP commands for additional optimizations
     driver.execute_cdp_cmd('Network.setUserAgentOverride', {
         "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     })
     
-    # Disable webdriver flag
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    
-    # Set timeouts
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(30)
-    
     return driver
 
-def get_product_details(driver, product_url):
-    """Get detailed information from a product page"""
-    try:
-        driver.get(product_url)
-        wait = WebDriverWait(driver, 5)
-        
-        # Wait for main elements to load
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-info-box")))
-        
-        # Get product name and price in one JavaScript call for better performance
-        script = """
-            return {
-                name: document.querySelector('h1.product-name.product-detail-product-name')?.textContent?.trim() || '',
-                price: document.querySelector('.price')?.textContent?.trim() || '',
-                description: document.querySelector('.product-detail > p')?.textContent?.trim() || ''
-            }
-        """
-        result = driver.execute_script(script)
-        
-        name = result['name'] or "Name not available"
-        price = result['price'] or "Price not available"
-        description = result['description'] or ""
-        
-        if not price or price == "Price not available":
+def get_product_details(driver, product_url, max_retries=3):
+    """Get detailed information from a product page with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            # Create new driver for each retry to avoid stale sessions
+            if attempt > 0:
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = setup_driver()
+                time.sleep(2)
+            
+            driver.get(product_url)
+            time.sleep(3)  # Wait longer for initial page load
+            
+            wait = WebDriverWait(driver, 10)  # Increased wait time
+            
+            # Wait for main elements to load with multiple selectors
             try:
-                price_element = driver.find_element(By.CSS_SELECTOR, "input.gucciProductPrice")
-                price = f"$ {price_element.get_attribute('value')}"
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-details--js")))
             except:
-                logging.warning(f"No price found for {product_url}")
-        
-        # Get all images in one go using JavaScript
-        images_script = """
-            return Array.from(document.querySelectorAll('.product-detail-carousel source[data-image-size="standard-retina"]'))
-                .map(source => source.srcset)
-                .filter(srcset => srcset)
-                .map(srcset => srcset.startsWith('http') ? srcset : 'https:' + srcset);
-        """
-        images = set(driver.execute_script(images_script))
-        
-        # Log successful extraction
-        logging.info(f"Successfully extracted - Name: {name}, Price: {price}")
-        
-        return {
-            'Gender': 'Women',
-            'Name': name,
-            'Description': description,
-            'Price': price,
-            'Images': list(images),
-            'Product URL': product_url
-        }
-        
-    except Exception as e:
-        logging.error(f"Error getting product details from {product_url}: {str(e)}")
-        return None
+                # Try alternative selectors if the first one fails
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-name")))
+            
+            try:
+                # Click the product details button to reveal description
+                details_button = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "product-details--js")))
+                driver.execute_script("arguments[0].click();", details_button)
+                time.sleep(2)
+            except Exception as e:
+                logging.warning(f"Could not click details button: {str(e)}")
+            
+            # Get product details in one JavaScript call with more error handling
+            script = """
+                try {
+                    return {
+                        name: document.querySelector('.product-name')?.textContent?.trim() || 
+                              document.querySelector('.pdp-link')?.textContent?.trim() || '',
+                        price: document.querySelector('.price .sales .value')?.textContent?.trim() || 
+                               document.querySelector('.price .value')?.textContent?.trim() || '',
+                        description: document.querySelector('.product-details-tabs__item p')?.textContent?.trim() || '',
+                        details: Array.from(document.querySelectorAll('.product-details-tabs__item p'))
+                                 .slice(1)
+                                 .map(p => p.textContent.trim())
+                                 .join(' ') || '',
+                        colors: Array.from(document.querySelectorAll('.swatches .swatch'))
+                                 .map(swatch => swatch.getAttribute('title') || swatch.getAttribute('alt'))
+                                 .filter(color => color)
+                    };
+                } catch (e) {
+                    return {
+                        name: '',
+                        price: '',
+                        description: '',
+                        details: '',
+                        colors: []
+                    };
+                }
+            """
+            result = driver.execute_script(script)
+            
+            # Get images with error handling
+            images_script = """
+                try {
+                    return Array.from(document.querySelectorAll('.large-images img.zoom-image'))
+                        .map(img => {
+                            let src = img.getAttribute('data-zoom-image') || img.src;
+                            return src.includes('?') ? src.split('?')[0] + '?$large$' : src + '?$large$';
+                        })
+                        .filter(src => src);
+                } catch (e) {
+                    return [];
+                }
+            """
+            images = set(driver.execute_script(images_script))
+            
+            # Verify we got at least some basic data
+            if not result['name'] and not result['price']:
+                raise Exception("Failed to extract basic product information")
+            
+            return {
+                'Gender': 'Women',  # Adjust based on URL/category
+                'Name': result['name'] or "Name not available",
+                'Colors': ', '.join(result['colors'] or []),
+                'Description': result['description'] or "",
+                'Details': result['details'] or "",
+                'Price': result['price'] or "Price not available",
+                'Images': list(images),
+                'Product URL': product_url
+            }
+            
+        except Exception as e:
+            logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for {product_url}: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(5)  # Wait longer between retries
+                continue
+            logging.error(f"All attempts failed for {product_url}")
+            return None
+    
+    return None
 
 def get_last_scraped_product(csv_filename):
     """Get the last successfully scraped product URL from the CSV"""
@@ -172,18 +187,30 @@ def get_last_scraped_product(csv_filename):
 def scrape_products_from_page(driver, csv_filename, resume_url=None):
     """Extract products from the current page and save in real-time"""
     wait = WebDriverWait(driver, 10)
-    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "product-tiles-grid-item")))
+    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "product-tile-container")))
     
-    # Get all product URLs and prices in one JavaScript call
+    # Get all product URLs in one JavaScript call
     script = """
-        return Array.from(document.querySelectorAll('.product-tiles-grid-item')).map(item => ({
-            url: item.querySelector('a.product-tiles-grid-item-link')?.href,
-            price: item.querySelector('.product-tiles-grid-item-info p.price span.sale')?.textContent?.trim()
+        return Array.from(document.querySelectorAll('.product-tile-container')).map(item => ({
+            url: item.querySelector('.pdp-link a')?.href,
+            price: item.querySelector('.price .sales .value')?.textContent?.trim()
         })).filter(item => item.url);
     """
     products_data = driver.execute_script(script)
     
-    logging.info(f"Found {len(products_data)} unique products")
+    # Load existing URLs from CSV to avoid duplicates
+    existing_urls = set()
+    try:
+        if os.path.exists(csv_filename):
+            df = pd.read_csv(csv_filename)
+            existing_urls = set(df['Product URL'].tolist())
+    except Exception as e:
+        logging.warning(f"Could not load existing URLs: {str(e)}")
+    
+    # Filter out already scraped products
+    products_data = [p for p in products_data if p['url'] not in existing_urls]
+    
+    logging.info(f"Found {len(products_data)} new unique products")
     
     # Handle resume logic
     if resume_url:
@@ -198,18 +225,22 @@ def scrape_products_from_page(driver, csv_filename, resume_url=None):
     for index, product_data in enumerate(products_data, 1):
         try:
             logging.info(f"Scraping product {index}/{len(products_data)}")
+            
+            # Skip if URL already exists
+            if product_data['url'] in existing_urls:
+                logging.info(f"Skipping already scraped product: {product_data['url']}")
+                continue
+                
             product = get_product_details(driver, product_data['url'])
             
-            if product and product.get('Images'):
-                # If grid price is available, use it
-                if product_data.get('price'):
-                    product['Price'] = product_data['price']
-                
+            if product:
                 # Save to CSV
                 df = pd.DataFrame([{
                     'Gender': product['Gender'],
                     'Name': product['Name'],
+                    'Colors': product['Colors'],
                     'Description': product['Description'],
+                    'Details': product['Details'],
                     'Price': product['Price'],
                     'Images': ','.join(product['Images']),
                     'Product URL': product['Product URL']
@@ -217,53 +248,149 @@ def scrape_products_from_page(driver, csv_filename, resume_url=None):
                 
                 df.to_csv(csv_filename, mode='a', header=not os.path.exists(csv_filename), index=False)
                 products.append(product)
-                logging.info(f"Scraped and saved product: {product['Name']} with price {product['Price']}")
+                existing_urls.add(product_data['url'])
+                logging.info(f"Scraped and saved product: {product['Name']}")
             
             # Go back to the product listing page
-            driver.execute_script("window.history.go(-1)")
-            time.sleep(1)
+            driver.get(driver.current_url)  # Refresh instead of using history
+            time.sleep(2)
             
         except Exception as e:
+            if "disconnected" in str(e):
+                logging.warning("Browser disconnected, recreating driver...")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = setup_driver()
+                driver.get(driver.current_url)
+                continue
+            
             logging.error(f"Error processing product URL {product_data['url']}: {str(e)}")
             continue
             
     return products
 
-def scrape_gucci_with_agent(start_page, end_page, agent_num):
-    base_url = 'https://www.gucci.com/us/en/ca/women/ready-to-wear-for-women-c-women-readytowear'
-    logging.info(f"Agent {agent_num}: Starting scrape from page {start_page} to {end_page}")
+def has_more_products(driver, last_product_count):
+    """Check if more products loaded after scrolling"""
+    try:
+        # Get current number of products
+        script = """
+            return document.querySelectorAll('.product-tile-container').length;
+        """
+        current_count = driver.execute_script(script)
+        
+        # If we got more products after scrolling, there might be more
+        return current_count > last_product_count
+    except Exception as e:
+        logging.error(f"Error checking for more products: {str(e)}")
+        return False
+
+def scroll_to_bottom(driver):
+    """Scroll to bottom and wait for new products to load"""
+    try:
+        # Get current height
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        
+        # Scroll in smaller increments
+        viewport_height = driver.execute_script("return window.innerHeight")
+        current_scroll = 0
+        
+        while current_scroll < last_height:
+            # Scroll by viewport height
+            current_scroll += viewport_height
+            driver.execute_script(f"window.scrollTo(0, {current_scroll});")
+            time.sleep(1)  # Wait between scrolls
+            
+            # Update total height
+            last_height = driver.execute_script("return document.body.scrollHeight")
+            
+    except Exception as e:
+        logging.error(f"Error scrolling: {str(e)}")
+
+def scrape_mk_with_agent(start_page, agent_num):
+    base_url = 'https://www.michaelkors.com/women/clothing/?start=0&sz=400'
+    us_site_url = 'https://www.michaelkors.com/region-selector?from=/'
+    logging.info(f"Agent {agent_num}: Starting scrape from page {start_page}")
     all_products = []
     
     # Define CSV filename with agent number
-    csv_filename = f'gucci_products_agent_{agent_num}.csv'
+    csv_filename = f'mk_products_agent_{agent_num}.csv'
     
     try:
         driver = setup_driver()
-        wait = WebDriverWait(driver, 5)
+        wait = WebDriverWait(driver, 30)  # Increased wait time for initial load
         
-        # Scrape assigned pages
-        for page_num in range(start_page, end_page):
-            page_url = f"{base_url}/{page_num}"
-            logging.info(f"Agent {agent_num}: Scraping products from page {page_num}: {page_url}")
+        # First handle region selection
+        driver.get(us_site_url)
+        time.sleep(3)
+        
+        try:
+            # Try to select US region if redirected to region selector
+            us_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href*='michaelkors.com/us']")))
+            driver.execute_script("arguments[0].click();", us_button)
+            time.sleep(3)
+        except Exception as e:
+            logging.warning(f"Could not find US region button: {str(e)}")
+        
+        # Now try to access the main page
+        driver.get(base_url)
+        time.sleep(5)  # Wait longer for initial page load
+        
+        # Verify we're on the US site
+        if "michaelkors.global" in driver.current_url:
+            logging.error(f"Agent {agent_num}: Redirected to global site, cannot proceed")
+            return all_products
+        
+        # Wait for initial products to appear and count them
+        try:
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-tile-container")))
             
-            driver.get(page_url)
+            # Wait for product count to stabilize
+            last_count = 0
+            stable_count = 0
+            max_attempts = 10
             
-            wait.until(
-                EC.presence_of_element_located((By.CLASS_NAME, "product-tiles-grid-item"))
-            )
-            logging.info(f"Agent {agent_num}: Product grid loaded for page {page_num}")
+            for attempt in range(max_attempts):
+                current_count = len(driver.find_elements(By.CLASS_NAME, "product-tile-container"))
+                logging.info(f"Current product count: {current_count}")
+                
+                if current_count == last_count:
+                    stable_count += 1
+                    if stable_count >= 3:  # Count is stable for 3 consecutive checks
+                        logging.info(f"Product count stabilized at {current_count}")
+                        break
+                else:
+                    stable_count = 0
+                    last_count = current_count
+                
+                time.sleep(2)  # Wait between checks
+                
+                # Scroll a bit to trigger more loading
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.5);")
+                time.sleep(2)
+                driver.execute_script("window.scrollTo(0, 0);")  # Scroll back to top
+                
+            logging.info(f"Found initial {current_count} products")
             
+        except Exception as e:
+            logging.error(f"Agent {agent_num}: Could not find product tiles: {str(e)}")
+            return all_products
+        
+        # Now proceed with scraping the products
+        try:
             products = scrape_products_from_page(driver, csv_filename)
-            all_products.extend(products)
+            if products:
+                all_products.extend(products)
+                logging.info(f"Agent {agent_num}: Successfully scraped {len(products)} products")
             
-            logging.info(f"Agent {agent_num}: Completed page {page_num}, total products: {len(all_products)}")
-            time.sleep(1)
+        except Exception as e:
+            logging.error(f"Agent {agent_num}: Error during scraping: {str(e)}")
         
-        logging.info(f"Agent {agent_num}: Successfully scraped {len(all_products)} products")
+        logging.info(f"Agent {agent_num}: Successfully scraped total of {len(all_products)} products")
         
     except Exception as e:
-        logging.error(f"Agent {agent_num}: Error during scraping: {e}")
-        raise
+        logging.error(f"Agent {agent_num}: Error during scraping: {str(e)}")
     
     finally:
         try:
@@ -275,40 +402,34 @@ def scrape_gucci_with_agent(start_page, end_page, agent_num):
     return all_products
 
 def combine_csv_files(num_agents):
-    """Combine CSV files from all agents into one final file"""
+    """Combine CSV files from all agents into one final file with deduplication"""
     dfs = []
     for i in range(num_agents):
         try:
-            df = pd.read_csv(f'gucci_products_agent_{i}.csv')
+            df = pd.read_csv(f'mk_products_agent_{i}.csv')
             dfs.append(df)
-            os.remove(f'gucci_products_agent_{i}.csv')  # Clean up individual files
+            os.remove(f'mk_products_agent_{i}.csv')  # Clean up individual files
         except FileNotFoundError:
             continue
     
     if dfs:
+        # Combine all DataFrames and remove duplicates based on Product URL
         combined_df = pd.concat(dfs, ignore_index=True)
-        combined_df.to_csv('gucci_products.csv', index=False)
-        logging.info(f"Combined {len(dfs)} files into gucci_products.csv")
+        combined_df.drop_duplicates(subset=['Product URL'], keep='first', inplace=True)
+        combined_df.to_csv('mk_products.csv', index=False)
+        logging.info(f"Combined {len(dfs)} files into mk_products.csv with {len(combined_df)} unique products")
 
-def scrape_gucci():
-    num_agents = 4  # Number of parallel scrapers
-    total_pages = 13  # Total number of pages to scrape
+def scrape_mk():
+    num_agents = 1  # Number of parallel scrapers
     
-    # Calculate pages per agent
-    pages_per_agent = math.ceil(total_pages / num_agents)
-    
-    # Create tasks for each agent
-    tasks = []
-    for i in range(num_agents):
-        start_page = i * pages_per_agent
-        end_page = min((i + 1) * pages_per_agent, total_pages)
-        tasks.append((start_page, end_page, i))
+    # Create tasks for each agent - now just with start pages
+    tasks = [(i, i) for i in range(num_agents)]
     
     # Run agents in parallel
     with ThreadPoolExecutor(max_workers=num_agents) as executor:
         futures = [
-            executor.submit(scrape_gucci_with_agent, start, end, agent_num)
-            for start, end, agent_num in tasks
+            executor.submit(scrape_mk_with_agent, start_page, agent_num)
+            for start_page, agent_num in tasks
         ]
         
         # Wait for all agents to complete
@@ -323,6 +444,6 @@ def scrape_gucci():
 
 if __name__ == "__main__":
     try:
-        scrape_gucci()
+        scrape_mk()
     except Exception as e:
         logging.error(f"Scraping failed: {e}")
