@@ -112,62 +112,130 @@ def get_product_details(driver, product_url, gender, max_retries=3):
             wait = WebDriverWait(driver, 10)
             
             # Wait for main elements to load
-            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-info-panel__title")))
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "title-price-block")))
             
             # Get product details in one JavaScript call
             script = """
                 try {
                     return {
-                        name: document.querySelector('.product-info-panel__title span')?.textContent?.trim() || '',
-                        price: document.querySelector('.product-info-panel__price')?.textContent?.trim() || '',
-                        color: document.querySelector('.product-swatches-panel__description span')?.getAttribute('title')?.trim() || '',
-                        details: Array.from(document.querySelectorAll('.product-details-accordion__description span'))
-                            .map(span => span.textContent.trim())
-                            .join(' | ') || ''
+                        name: document.querySelector('.text-book-6.lg\\\\:text-book-5')?.textContent?.trim() || '',
+                        price: document.querySelector('.text-light-6 span')?.textContent?.trim() || '',
+                        color: document.querySelector('.text-light-6')?.textContent?.trim() || '',
                     };
                 } catch (e) {
                     return {
                         name: '',
                         price: '',
-                        color: '',
-                        details: ''
+                        color: ''
                     };
                 }
             """
             result = driver.execute_script(script)
             
-            # Try to get all colors
+            # Click Information & Details button and get details
             try:
-                # Click color selector if it exists
-                color_button = driver.find_element(By.CLASS_NAME, "product-swatches-panel")
-                color_button.click()
+                details_button = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Information & Details')]"))
+                )
+                driver.execute_script("arguments[0].click();", details_button)
                 time.sleep(1)
                 
-                # Get all color names
-                colors_script = """
-                    return Array.from(document.querySelectorAll('.sheet-container-image-item__title span'))
-                        .map(el => el.textContent.trim())
-                        .join(', ');
+                # Get all text from details modal
+                details_script = """
+                    try {
+                        const detailsDiv = document.querySelector('.gap-lg.lg\\\\:gap-xl');
+                        if (!detailsDiv) return '';
+                        
+                        // Get all text content from the modal
+                        const allText = Array.from(detailsDiv.querySelectorAll('p, .text-light-6'))
+                            .map(el => el.textContent.trim())
+                            .filter(text => text)
+                            .join(' | ');
+                        
+                        return allText;
+                    } catch (e) {
+                        return '';
+                    }
                 """
-                colors = driver.execute_script(colors_script)
-                result['color'] = colors
-            except:
-                pass
+                details = driver.execute_script(details_script)
+                result['details'] = details
+                
+            except Exception as e:
+                logging.warning(f"Error getting product details: {str(e)}")
+                result['details'] = ''
+            
+            # Try to get colors
+            try:
+                # First try to get single color
+                color_script = """
+                    try {
+                        // First try to get single color
+                        const colorSpan = document.querySelector('.gap-primitives-1 .text-light-6');
+                        if (colorSpan) return colorSpan.textContent.trim();
+                        
+                        // If no single color, try to get multiple colors
+                        const colorButton = document.querySelector('.gap-primitives-2');
+                        if (colorButton) {
+                            colorButton.click();
+                            // Wait briefly for modal to open
+                            return new Promise(resolve => {
+                                setTimeout(() => {
+                                    const colors = Array.from(document.querySelectorAll('.gap-sm.mb-4 span.text-center.text-text-primary'))
+                                        .map(span => span.textContent.trim())
+                                        .filter(Boolean)
+                                        .join(', ');
+                                    resolve(colors);
+                                }, 1000);
+                            });
+                        }
+                        return '';
+                    } catch (e) {
+                        return '';
+                    }
+                """
+                color = driver.execute_script(color_script)
+                result['color'] = color
+                
+            except Exception as e:
+                logging.warning(f"Error getting colors: {str(e)}")
+                result['color'] = ''
             
             # Get sizes by clicking size selector and getting from modal
             try:
-                # Click size selector chevron icon
-                size_button = driver.find_element(By.CLASS_NAME, "transactional-picker__icon-container")
+                # Click size selector button
+                size_button = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-testid='size-selector']"))
+                )
                 driver.execute_script("arguments[0].click();", size_button)
                 time.sleep(1)
                 
+                # Click US tab if not already selected
+                us_tab = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[role='tab']:nth-child(2)"))
+                )
+                if not "selected" in us_tab.get_attribute("data-headlessui-state"):
+                    driver.execute_script("arguments[0].click();", us_tab)
+                    time.sleep(1)
+                
                 # Get sizes from modal
                 sizes_script = """
-                    return Array.from(document.querySelectorAll('.size-picker__size-box'))
-                        .map(box => ({
-                            size: box.getAttribute('value'),
-                            available: !box.classList.contains('size-picker__size-box--muted')
-                        }));
+                    try {
+                        const sizes = [];
+                        // Get all size options (both available and disabled)
+                        document.querySelectorAll('[data-testid="size-not-disabled"], [data-testid="size-disabled"]').forEach(item => {
+                            const label = item.querySelector('label');
+                            const isDisabled = item.querySelector('.line-through');
+                            if (label) {
+                                sizes.push({
+                                    size: label.textContent.trim(),
+                                    available: !isDisabled
+                                });
+                            }
+                        });
+                        return sizes;
+                    } catch (e) {
+                        return [];
+                    }
                 """
                 sizes = driver.execute_script(sizes_script)
                 
@@ -178,14 +246,6 @@ def get_product_details(driver, product_url, gender, max_retries=3):
                 sizes_str = ', '.join(sizes_info)
                 result['sizes'] = sizes_str
                 
-                # Close modal if it exists
-                try:
-                    close_button = driver.find_element(By.CLASS_NAME, "sheet-container-header__close")
-                    driver.execute_script("arguments[0].click();", close_button)
-                    time.sleep(1)
-                except:
-                    pass
-                
             except Exception as e:
                 logging.warning(f"Error getting sizes: {str(e)}")
                 result['sizes'] = ''
@@ -193,29 +253,32 @@ def get_product_details(driver, product_url, gender, max_retries=3):
             # Get images with error handling
             images_script = """
                 try {
-                    return Array.from(document.querySelectorAll('.desktop-product-gallery__image__picture source'))
-                        .map(source => {
-                            let srcset = source.getAttribute('srcset') || source.getAttribute('data-srcset');
-                            if (!srcset) return null;
-                            // Get the largest image URL from srcset
-                            let urls = srcset.split(',')
-                                .map(s => s.trim().split(' ')[0])
-                                .filter(url => url.includes('3000'));
-                            return urls[0] || null;
-                        })
-                        .filter(src => src);
+                    const images = new Set();
+                    
+                    // Get all img elements in the slider
+                    document.querySelectorAll('.embla__slide img').forEach(img => {
+                        const src = img.getAttribute('src');
+                        if (src && src.includes('armani.com')) {
+                            images.add(src);
+                        }
+                    });
+                    
+                    return Array.from(images);
                 } catch (e) {
                     return [];
                 }
             """
-            images = set(driver.execute_script(images_script))
+            images = driver.execute_script(images_script)
+            
+            # No need for cleaning URLs anymore since we're getting direct src
+            cleaned_images = images
             
             # Clean up the data
             name = result['name'].strip()
             price = result['price'].replace('$', '').replace(',', '').strip()
-            color = result['color'].strip()
+            color = result['color'].replace('Colour:', '').strip()
             sizes = result.get('sizes', '')
-            details = result.get('details', '').strip()
+            details = result.get('details', '')
             
             # Verify we got at least some basic data
             if not name or not price:
@@ -227,8 +290,8 @@ def get_product_details(driver, product_url, gender, max_retries=3):
                 'Color': color,
                 'Sizes': sizes,
                 'Price': price,
-                'Details': details,
-                'Images': list(images),
+                'Details': details,  # Renamed from description to details
+                'Images': cleaned_images,
                 'Product URL': product_url
             }
             
@@ -252,96 +315,26 @@ def get_last_scraped_product(csv_filename):
         pass
     return None
 
-def scroll_and_click_view_more(driver, wait):
-    """Scroll and click View More button until no more products load"""
-    last_product_count = 0
-    no_new_products_count = 0
-    max_attempts_without_new = 5
-    
-    while True:
-        # Get current product count
-        current_count = len(driver.find_elements(By.CLASS_NAME, "product-listing-shelf__product-card"))
-        logging.info(f"Current product count: {current_count}")
-        
-        if current_count == last_product_count:
-            no_new_products_count += 1
-            logging.info(f"No new products found, attempt {no_new_products_count}/{max_attempts_without_new}")
-            
-            if no_new_products_count >= max_attempts_without_new:
-                logging.info("Reached maximum attempts without new products")
-                break
-        else:
-            no_new_products_count = 0
-            last_product_count = current_count
-            logging.info("Found new products, continuing to scroll...")
-        
-        # Scroll down in smaller increments
-        viewport_height = driver.execute_script("return window.innerHeight")
-        current_scroll = driver.execute_script("return window.pageYOffset")
-        
-        # Scroll by 75% of viewport height for smoother loading
-        scroll_amount = current_scroll + (viewport_height * 0.75)
-        driver.execute_script(f"window.scrollTo(0, {scroll_amount});")
-        time.sleep(2)
-        
-        # Try to find and click View More button
-        try:
-            view_more = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.CLASS_NAME, "product-listing-shelf__view-more-new"))
-            )
-            logging.info("Found View More button, clicking...")
-            driver.execute_script("arguments[0].click();", view_more)
-            time.sleep(3)  # Wait longer after clicking
-            
-            # Scroll back up slightly to trigger lazy loading
-            driver.execute_script(f"window.scrollTo(0, {max(0, scroll_amount - 200)});")
-            time.sleep(1)
-            
-            # Then scroll back down
-            driver.execute_script(f"window.scrollTo(0, {scroll_amount});")
-            time.sleep(1)
-            
-        except Exception as e:
-            logging.info(f"No View More button found or error clicking it: {str(e)}")
-            
-            # If no button, try scrolling to absolute bottom
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-        
-        # Add random delay between actions
-        time.sleep(random.uniform(1, 2))
-        
-        # Safety check - if we've loaded a lot of products, verify the count
-        if current_count > 80:
-            # Scroll back to top and then bottom to ensure all products are loaded
-            driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(2)
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            
-            # Recheck product count
-            final_count = len(driver.find_elements(By.CLASS_NAME, "product-listing-shelf__product-card"))
-            if final_count > current_count:
-                last_product_count = final_count
-                no_new_products_count = 0
-                logging.info(f"Found more products after full scroll: {final_count}")
-    
-    logging.info(f"Finished loading products. Total count: {current_count}")
-    return current_count
-
 def scrape_products_from_page(driver, csv_filename, gender):
-    """Extract products from the current page and save in real-time"""
+    """Extract products directly from the product tiles"""
     wait = WebDriverWait(driver, 10)
-    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-listing-shelf__product-card")))
+    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "outline-stroke-cards-hover")))
     
-    # Get all product URLs in one JavaScript call
+    # Get all product data in one JavaScript call
     script = """
-        return Array.from(document.querySelectorAll('.product-listing-shelf__product-card'))
-            .map(item => ({
-                url: item.querySelector('a')?.href,
-                price: item.querySelector('.product-card-v2-price__current')?.textContent?.trim()
-            }))
-            .filter(item => item.url);
+        return Array.from(document.querySelectorAll('.outline-stroke-cards-hover')).map(item => {
+            // Get all image sources from the product tile
+            const images = Array.from(item.querySelectorAll('picture img'))
+                .map(img => img.getAttribute('src'))
+                .filter(src => src && src.includes('armani.com'));
+            
+            return {
+                name: item.querySelector('.text-book-6')?.textContent?.trim() || '',
+                price: item.querySelector('.text-light-6')?.textContent?.trim() || '',
+                url: item.querySelector('a')?.href || '',
+                images: [...new Set(images)]  // Remove duplicates
+            };
+        }).filter(item => item.name && item.price && item.url);
     """
     products_data = driver.execute_script(script)
     logging.info(f"Found {len(products_data)} products on page")
@@ -360,26 +353,25 @@ def scrape_products_from_page(driver, csv_filename, gender):
     logging.info(f"Found {len(products_data)} new products to scrape")
     
     products = []
-    for index, product_data in enumerate(products_data, 1):
+    for product_data in products_data:
         try:
-            logging.info(f"Scraping product {index}/{len(products_data)}")
+            product = {
+                'Gender': gender,
+                'Name': product_data['name'],
+                'Price': product_data['price'].replace('$', '').replace(',', '').strip(),
+                'Images': product_data['images'],
+                'Product URL': product_data['url']
+            }
             
-            product = get_product_details(driver, product_data['url'], gender)
-            
-            if product:
-                # Save to CSV immediately
-                df = pd.DataFrame([product])
-                df.to_csv(csv_filename, mode='a', header=not os.path.exists(csv_filename), index=False)
-                products.append(product)
-                existing_urls.add(product_data['url'])
-                logging.info(f"Scraped and saved product: {product['Name']}")
-            
-            # Go back to the product listing page
-            driver.get(driver.current_url)
-            time.sleep(1)
+            # Save to CSV immediately
+            df = pd.DataFrame([product])
+            df.to_csv(csv_filename, mode='a', header=not os.path.exists(csv_filename), index=False)
+            products.append(product)
+            existing_urls.add(product_data['url'])
+            logging.info(f"Scraped and saved product: {product['Name']}")
             
         except Exception as e:
-            logging.error(f"Error processing product URL {product_data['url']}: {str(e)}")
+            logging.error(f"Error processing product: {str(e)}")
             continue
             
     return products
@@ -475,94 +467,98 @@ def scroll_until_end(driver, wait):
         logging.error(f"Error during scrolling: {str(e)}")
         return 0
 
-def scrape_burberry_category(gender, base_url, csv_filename):
-    """Scrape a specific Burberry category (men/women) and save to dedicated CSV"""
-    logging.info(f"Starting Burberry {gender}'s scraper")
+def scrape_armani_category(gender, base_url, csv_filename):
+    """Scrape a specific Armani category (men/women) and save to dedicated CSV"""
+    logging.info(f"Starting Armani {gender}'s scraper")
     
     retry_count = 0
     max_retries = 5
     
-    while retry_count < max_retries:
-        try:
-            driver = setup_driver()
-            
-            # Initial delay before accessing site
-            time.sleep(random.uniform(5, 8))
-            
-            # Navigate directly to the category page
-            driver.get(base_url)
-            time.sleep(random.uniform(8, 10))  # Longer wait for page load
-            
-            # Check if we're on the right page
-            if "burberry.com" not in driver.current_url:
-                logging.error(f"{gender}: Redirected away from Burberry site")
-                retry_count += 1
-                continue
-            
-            # Wait for initial products with longer timeout
-            wait = WebDriverWait(driver, 45)
-            try:
-                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-listing-shelf__product-card")))
-            except:
-                logging.error(f"{gender}: Products not found on page")
-                retry_count += 1
-                continue
-            
-            # Add random delay before scrolling
-            time.sleep(random.uniform(3, 5))
-            
-            # Scroll and click View More until all products are loaded
-            scroll_and_click_view_more(driver, wait)
-            
-            # Scrape products
-            products = scrape_products_from_page(driver, csv_filename, gender)
-            if products:
-                logging.info(f"{gender}: Successfully scraped {len(products)} products")
-                break
-            else:
-                logging.error(f"{gender}: No products were scraped")
-                retry_count += 1
-            
-        except Exception as e:
-            logging.error(f"{gender}: Error during scraping (attempt {retry_count + 1}/{max_retries}): {str(e)}")
-            retry_count += 1
-            time.sleep(random.uniform(15, 30))
-            
-        finally:
-            try:
-                driver.quit()
-            except:
-                pass
+    # Set max pages based on gender
+    max_pages = 10 if gender == "Men" else 4
     
-    if retry_count == max_retries:
-        logging.error(f"{gender}: Failed to scrape after maximum retries")
-
-def scrape_burberry():
-    """Main function to scrape both men's and women's Burberry products sequentially"""
-    men_base_url = 'https://us.burberry.com/l/mens-clothing/'
-    women_base_url = 'https://us.burberry.com/l/womens-clothing/'
-    
-    # Scrape men's products first
     try:
-        logging.info("Starting men's scraping...")
-        scrape_burberry_category("Men", men_base_url, 'burberry_men_products.csv')
-        logging.info("Men's scraping completed")
+        driver = setup_driver()
+        
+        for page in range(1, max_pages + 1):
+            while retry_count < max_retries:
+                try:
+                    # Construct page URL
+                    page_url = f"{base_url}/?page={page}"
+                    logging.info(f"Scraping {gender}'s page {page}: {page_url}")
+                    
+                    # Navigate to the page
+                    driver.get(page_url)
+                    time.sleep(5)  # Reduced initial wait
+                    
+                    # Check if we're on the right page
+                    if "armani.com" not in driver.current_url:
+                        logging.error(f"{gender}: Redirected away from Armani site on page {page}")
+                        retry_count += 1
+                        continue
+                    
+                    # Wait for initial products with longer timeout
+                    wait = WebDriverWait(driver, 45)
+                    try:
+                        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "outline-stroke-cards-hover")))
+                    except:
+                        logging.error(f"{gender}: Products not found on page {page}")
+                        retry_count += 1
+                        continue
+                    
+                    # Quick scroll to bottom and back up
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(2)
+                    driver.execute_script("window.scrollTo(0, 0);")
+                    time.sleep(1)
+                    
+                    # One more quick scroll down
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(2)
+                    
+                    # Scrape products from current page
+                    products = scrape_products_from_page(driver, csv_filename, gender)
+                    if products:
+                        logging.info(f"{gender}: Successfully scraped {len(products)} products from page {page}")
+                        break  # Break retry loop for this page
+                    else:
+                        logging.error(f"{gender}: No products were scraped from page {page}")
+                        retry_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"{gender}: Error during scraping page {page} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+                    retry_count += 1
+                    time.sleep(random.uniform(15, 30))
+            
+            # Reset retry count for next page
+            retry_count = 0
+            
+            # Add shorter delay between pages
+            if page < max_pages:
+                time.sleep(3)
+                
     except Exception as e:
-        logging.error(f"Error in men's scraper: {str(e)}")
+        logging.error(f"{gender}: Error during scraping: {str(e)}")
+    finally:
+        try:
+            driver.quit()
+        except:
+            pass
+
+def scrape_armani():
+    """Main function to scrape both men's and women's Armani products sequentially"""
+    men_base_url = 'https://www.armani.com/en-us/giorgio-armani/man/clothing'
+    women_base_url = 'https://www.armani.com/en-us/giorgio-armani/woman/clothing'
     
-    # Add delay between categories
-    time.sleep(random.uniform(10, 15))
-    
-    # Then scrape women's products
     try:
         logging.info("Starting women's scraping...")
-        scrape_burberry_category("Women", women_base_url, 'burberry_women_products.csv')
+        scrape_armani_category("Women", women_base_url, 'armani_women_products.csv')
         logging.info("Women's scraping completed")
     except Exception as e:
         logging.error(f"Error in women's scraper: {str(e)}")
 
 if __name__ == "__main__":
     try:
-        scrape_burberry()
+        scrape_armani()
     except Exception as e:
         logging.error(f"Scraping failed: {e}")
