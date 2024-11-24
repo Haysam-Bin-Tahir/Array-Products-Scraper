@@ -82,47 +82,50 @@ def setup_driver():
 def scrape_products_from_page(driver, csv_filename):
     """Extract products from the current page and save in real-time"""
     wait = WebDriverWait(driver, 10)
-    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-grid-product")))
+    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "productCard")))
     
     # Get all product data in one JavaScript call
     script = """
-        return Array.from(document.querySelectorAll('.product-grid-product')).map(item => {
+        return Array.from(document.querySelectorAll('.productCard')).map(item => {
             // Get product details
-            const title = item.querySelector('.product-grid-product-info__name h2')?.textContent?.trim() || '';
-            const price = item.querySelector('.price-current__amount .money-amount__main')?.textContent?.trim() || '';
-            const url = item.querySelector('.product-link')?.href || '';
-            const image = item.querySelector('.media-image__image')?.src || '';
+            const title = item.querySelector('.productCard__content__main__name')?.textContent?.trim() || '';
+            const price = item.querySelector('.productCard__content__main__price-container__price p')?.textContent?.trim() || '';
+            const url = item.querySelector('a.productCard__image')?.href || '';
+            
+            // Get both main and hover images
+            const mainImage = item.querySelector('.productCard__image__picture__image img')?.src || '';
+            const hoverImage = item.querySelector('.productCard__image__picture__imageHover img')?.src || '';
+            const images = [mainImage, hoverImage].filter(src => src);
             
             return {
                 name: title,
                 price: price,
                 url: url,
-                image: image
+                images: images
             };
         }).filter(item => item.name && item.price && item.url);
     """
     products_data = driver.execute_script(script)
     logging.info(f"Found {len(products_data)} products on page")
     
-    # Load existing data and add gender if needed
+    # Load existing URLs to avoid duplicates
+    existing_urls = set()
     if os.path.exists(csv_filename):
         df = pd.read_csv(csv_filename)
         if 'Gender' not in df.columns:
-            df['Gender'] = 'Men'  # Add gender column to existing data
+            df['Gender'] = 'Men'
             df.to_csv(csv_filename, index=False)
         existing_urls = set(df['Product URL'].tolist())
-    else:
-        existing_urls = set()
     
     # Process and save new products
     products = []
     for product_data in products_data:
         if product_data['url'] not in existing_urls:
             product = {
-                'Gender': 'Women',  # Add gender for new products
+                'Gender': 'Men',
                 'Name': product_data['name'],
                 'Price': product_data['price'].replace('$', '').replace(',', '').strip(),
-                'Image': product_data['image'],
+                'Images': ' | '.join(product_data['images']),
                 'Product URL': product_data['url']
             }
             
@@ -139,8 +142,8 @@ def scroll_and_load_all_products(driver, wait):
     total_products = 0
     bottom_reached_count = 0
     required_bottom_hits = 3
-    scroll_pause_time = 0.15
-    scroll_increment = 900
+    scroll_pause_time = 0.1
+    scroll_increment = 1500
     
     while bottom_reached_count < required_bottom_hits:
         try:
@@ -154,8 +157,8 @@ def scroll_and_load_all_products(driver, wait):
             driver.execute_script(f"window.scrollTo(0, {next_position});")
             time.sleep(scroll_pause_time)
             
-            # Get current product count
-            current_count = len(driver.find_elements(By.CLASS_NAME, "product-grid-product"))
+            # Get current product count using correct selector
+            current_count = len(driver.find_elements(By.CLASS_NAME, "productCard"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -168,20 +171,21 @@ def scroll_and_load_all_products(driver, wait):
                 logging.info(f"Bottom reached {bottom_reached_count}/{required_bottom_hits} times")
                 
                 if bottom_reached_count < required_bottom_hits:
-                    scroll_up_position = max(0, current_position - 2000)
+                    # Scroll up more aggressively
+                    scroll_up_position = max(0, current_position - 3000)
                     driver.execute_script(f"window.scrollTo(0, {scroll_up_position});")
-                    time.sleep(0.5)
+                    time.sleep(0.3)
             
         except Exception as e:
             logging.warning(f"Error during scroll: {str(e)}")
-            time.sleep(0.3)
+            time.sleep(0.2)
             continue
     
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_zara(url):
-    """Main function to scrape Zara products"""
+def scrape_valentino(url):
+    """Main function to scrape Valentino products"""
     retry_count = 0
     max_retries = 3
     
@@ -192,16 +196,37 @@ def scrape_zara(url):
             time.sleep(5)
             
             # Check if we're on the right page
-            if "zara.com" not in driver.current_url:
-                logging.error("Redirected away from Zara site")
+            if "valentino.com" not in driver.current_url:
+                logging.error("Redirected away from Valentino site")
                 retry_count += 1
                 continue
             
-            wait = WebDriverWait(driver, 10)
+            # Try to click either type of View All button
+            try:
+                # First try the button with data-page-size
+                view_all_button = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "p.vlt-cta-white[data-page-size]"))
+                )
+                driver.execute_script("arguments[0].click();", view_all_button)
+                logging.info("Clicked View All button with data-page-size")
+                time.sleep(3)
+            except:
+                try:
+                    # Then try the other View All button
+                    view_all_button = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, ".categoryListining__load-more__cta-container .vlt-cta-white"))
+                    )
+                    driver.execute_script("arguments[0].click();", view_all_button)
+                    logging.info("Clicked View All button in container")
+                    time.sleep(3)
+                except Exception as e:
+                    logging.warning(f"Could not find or click any View All button: {str(e)}")
+            
+            wait = WebDriverWait(driver, 1)
             total_products = scroll_and_load_all_products(driver, wait)
             
             if total_products > 0:
-                products = scrape_products_from_page(driver, 'zara_women_products.csv')
+                products = scrape_products_from_page(driver, 'valentino_men_products.csv')
                 logging.info(f"Successfully scraped {len(products)} products")
                 break
             else:
@@ -223,5 +248,5 @@ def scrape_zara(url):
         logging.error("Failed to scrape after maximum retries")
 
 if __name__ == "__main__":
-    zara_url = 'https://www.zara.com/us/en/woman-skirts-l1299.html?v1=2420454'  # Replace with the Zara URL you want to scrape
-    scrape_zara(zara_url)
+    valentino_url = 'https://www.valentino.com/en-us/men/ready-to-wear?productcategorylist_675964757=true&productcategorylist_804968256=true&productcategorylist_877364845=true'
+    scrape_valentino(valentino_url)
