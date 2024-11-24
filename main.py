@@ -10,6 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException
 
 logging.basicConfig(level=logging.INFO)
 
@@ -79,71 +80,86 @@ def setup_driver():
     
     return driver
 
-def scrape_products_from_page(driver, csv_filename):
-    """Extract products from the current page and save in real-time"""
-    wait = WebDriverWait(driver, 10)
-    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "productCard")))
-    
-    # Get all product data in one JavaScript call
-    script = """
-        return Array.from(document.querySelectorAll('.productCard')).map(item => {
-            // Get product details
-            const title = item.querySelector('.productCard__content__main__name')?.textContent?.trim() || '';
-            const price = item.querySelector('.productCard__content__main__price-container__price p')?.textContent?.trim() || '';
-            const url = item.querySelector('a.productCard__image')?.href || '';
-            
-            // Get both main and hover images
-            const mainImage = item.querySelector('.productCard__image__picture__image img')?.src || '';
-            const hoverImage = item.querySelector('.productCard__image__picture__imageHover img')?.src || '';
-            const images = [mainImage, hoverImage].filter(src => src);
-            
-            return {
-                name: title,
-                price: price,
-                url: url,
-                images: images
-            };
-        }).filter(item => item.name && item.price && item.url);
-    """
-    products_data = driver.execute_script(script)
-    logging.info(f"Found {len(products_data)} products on page")
-    
-    # Load existing URLs to avoid duplicates
-    existing_urls = set()
-    if os.path.exists(csv_filename):
-        df = pd.read_csv(csv_filename)
-        if 'Gender' not in df.columns:
-            df['Gender'] = 'Men'
-            df.to_csv(csv_filename, index=False)
-        existing_urls = set(df['Product URL'].tolist())
-    
-    # Process and save new products
+def scrape_products_from_page(driver, output_file):
+    """Scrape products from the current page"""
     products = []
-    for product_data in products_data:
-        if product_data['url'] not in existing_urls:
-            product = {
-                'Gender': 'Men',
-                'Name': product_data['name'],
-                'Price': product_data['price'].replace('$', '').replace(',', '').strip(),
-                'Images': ' | '.join(product_data['images']),
-                'Product URL': product_data['url']
-            }
+    
+    try:
+        # Wait for products to be visible and get them
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
+        logging.info(f"Found {len(product_cards)} products on page")
+        
+        if not product_cards:
+            return []
             
-            # Save to CSV immediately
-            df = pd.DataFrame([product])
-            df.to_csv(csv_filename, mode='a', header=not os.path.exists(csv_filename), index=False)
-            products.append(product)
-            existing_urls.add(product_data['url'])
+        for card in product_cards:
+            try:
+                # Extract product details
+                name = card.find_element(By.CSS_SELECTOR, ".product-card__name").text.strip()
+                price = card.find_element(By.CSS_SELECTOR, ".product-card__price").text.strip()
+                link = card.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
+                
+                # Get images
+                try:
+                    # Try to get both main and hover images
+                    images = card.find_elements(By.CSS_SELECTOR, "img.product-card__picture")
+                    image_urls = []
+                    
+                    for img in images:
+                        # Get srcset attribute which contains high-res images
+                        srcset = img.get_attribute("srcset")
+                        if srcset:
+                            # Get the first (main) image URL from srcset
+                            image_url = srcset.split(',')[0].split(' ')[0]
+                            if image_url and not image_url.endswith('placeholder.svg'):
+                                image_urls.append(image_url)
+                    
+                    # Remove duplicates while preserving order
+                    image_urls = list(dict.fromkeys(image_urls))
+                    
+                except Exception as img_error:
+                    logging.warning(f"Error getting images: {str(img_error)}")
+                    image_urls = []
+                
+                product = {
+                    'Gender': 'Men',
+                    'name': name,
+                    'price': price,
+                    'link': link,
+                    'main_image': image_urls[0] if image_urls else '',
+                    'hover_image': image_urls[1] if len(image_urls) > 1 else ''
+                }
+                products.append(product)
+                
+            except Exception as e:
+                logging.warning(f"Error scraping individual product: {str(e)}")
+                continue
+        
+        # Save to CSV if we have products
+        if products:
+            df = pd.DataFrame(products)
             
-    return products
+            # If file exists, append without header
+            if os.path.exists(output_file):
+                df.to_csv(output_file, mode='a', header=False, index=False)
+            else:
+                df.to_csv(output_file, index=False)
+                
+            logging.info(f"Saved {len(products)} products to {output_file}")
+            
+        return products
+        
+    except Exception as e:
+        logging.error(f"Error in scrape_products_from_page: {str(e)}")
+        return []
 
 def scroll_and_load_all_products(driver, wait):
     """Scroll smoothly until absolute bottom is reached multiple times"""
     total_products = 0
     bottom_reached_count = 0
-    required_bottom_hits = 3
-    scroll_pause_time = 0.1
-    scroll_increment = 1500
+    required_bottom_hits = 1  # Number of times we need to hit bottom
+    scroll_pause_time = 0.5  # Increased pause time
+    scroll_increment = 500  # Smaller increments for smoother scrolling
     
     while bottom_reached_count < required_bottom_hits:
         try:
@@ -153,12 +169,18 @@ def scroll_and_load_all_products(driver, wait):
             viewport_height = driver.execute_script("return window.innerHeight")
             
             # Smooth scroll down
-            next_position = current_position + scroll_increment
-            driver.execute_script(f"window.scrollTo(0, {next_position});")
+            next_position = min(current_position + scroll_increment, total_height - viewport_height)
+            driver.execute_script(f"window.scrollTo({{top: {next_position}, behavior: 'smooth'}});")
             time.sleep(scroll_pause_time)
             
-            # Get current product count using correct selector
-            current_count = len(driver.find_elements(By.CLASS_NAME, "productCard"))
+            # Wait for images to load
+            try:
+                wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "img.product-card__picture[srcset*='prada']")) > 0)
+            except:
+                pass
+            
+            # Get current product count
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "article.product-card"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -171,82 +193,97 @@ def scroll_and_load_all_products(driver, wait):
                 logging.info(f"Bottom reached {bottom_reached_count}/{required_bottom_hits} times")
                 
                 if bottom_reached_count < required_bottom_hits:
-                    # Scroll up more aggressively
-                    scroll_up_position = max(0, current_position - 3000)
-                    driver.execute_script(f"window.scrollTo(0, {scroll_up_position});")
-                    time.sleep(0.3)
+                    # Scroll back up to trigger more loading
+                    driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
+                    time.sleep(1)
             
         except Exception as e:
             logging.warning(f"Error during scroll: {str(e)}")
-            time.sleep(0.2)
+            time.sleep(0.5)
             continue
+    
+    # Final scroll to top
+    driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
+    time.sleep(1)
     
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_valentino(url):
-    """Main function to scrape Valentino products"""
+def scrape_prada(base_url):
+    """Main function to scrape Prada products"""
     retry_count = 0
     max_retries = 3
+    page_num = 1
+    max_pages = 23
+    products_data = []
+    driver = None
     
-    while retry_count < max_retries:
-        try:
-            driver = setup_driver()
-            driver.get(url)
-            time.sleep(5)
-            
-            # Check if we're on the right page
-            if "valentino.com" not in driver.current_url:
-                logging.error("Redirected away from Valentino site")
-                retry_count += 1
-                continue
-            
-            # Try to click either type of View All button
+    try:
+        # Initialize driver once
+        driver = setup_driver()
+        wait = WebDriverWait(driver, 10)
+        driver.set_page_load_timeout(5)
+        
+        while retry_count < max_retries and page_num <= max_pages:
             try:
-                # First try the button with data-page-size
-                view_all_button = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "p.vlt-cta-white[data-page-size]"))
-                )
-                driver.execute_script("arguments[0].click();", view_all_button)
-                logging.info("Clicked View All button with data-page-size")
-                time.sleep(3)
-            except:
-                try:
-                    # Then try the other View All button
-                    view_all_button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, ".categoryListining__load-more__cta-container .vlt-cta-white"))
-                    )
-                    driver.execute_script("arguments[0].click();", view_all_button)
-                    logging.info("Clicked View All button in container")
-                    time.sleep(3)
-                except Exception as e:
-                    logging.warning(f"Could not find or click any View All button: {str(e)}")
-            
-            wait = WebDriverWait(driver, 1)
-            total_products = scroll_and_load_all_products(driver, wait)
-            
-            if total_products > 0:
-                products = scrape_products_from_page(driver, 'valentino_men_products.csv')
-                logging.info(f"Successfully scraped {len(products)} products")
-                break
-            else:
-                logging.error("No products found")
-                retry_count += 1
+                url = f"{base_url}/page/{page_num}"
+                logging.info(f"Scraping page {page_num}: {url}")
                 
-        except Exception as e:
-            logging.error(f"Error during scraping (attempt {retry_count + 1}/{max_retries}): {str(e)}")
-            retry_count += 1
-            time.sleep(random.uniform(10, 15))
-            
-        finally:
-            try:
+                try:
+                    driver.get(url)
+                except TimeoutException:
+                    pass
+                    
+                time.sleep(5)
+                
+                # Check if we're on the right page
+                if "prada.com" not in driver.current_url:
+                    logging.error(f"Redirected away from Prada site on page {page_num}")
+                    retry_count += 1
+                    continue
+                
+                # Scroll to load all images
+                total_products = scroll_and_load_all_products(driver, wait)
+                logging.info(f"Found {total_products} products after scrolling")
+                
+                # Wait a bit for images to finish loading
+                time.sleep(3)
+                    
+                # Scrape products from current page
+                try:
+                    products = scrape_products_from_page(driver, 'prada_men_products.csv')
+                    if products:
+                        products_data.extend(products)
+                        logging.info(f"Successfully scraped {len(products)} products from page {page_num}")
+                        page_num += 1  # Move to next page only on success
+                        retry_count = 0  # Reset retry count on success
+                    else:
+                        logging.error(f"No products found on page {page_num}")
+                        retry_count += 1
+                except Exception as e:
+                    logging.error(f"Error scraping page {page_num}: {str(e)}")
+                    retry_count += 1
+                    
+            except Exception as e:
+                logging.error(f"Error during scraping page {page_num} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+                retry_count += 1
+                time.sleep(random.uniform(10, 15))
+                
+            # Add delay between pages
+            time.sleep(random.uniform(3, 5))
+        
+    finally:
+        try:
+            if driver:
                 driver.quit()
-            except:
-                pass
+        except:
+            pass
     
     if retry_count == max_retries:
         logging.error("Failed to scrape after maximum retries")
+        
+    return products_data
 
 if __name__ == "__main__":
-    valentino_url = 'https://www.valentino.com/en-us/men/ready-to-wear?productcategorylist_675964757=true&productcategorylist_804968256=true&productcategorylist_877364845=true'
-    scrape_valentino(valentino_url)
+    prada_url = 'https://www.prada.com/us/en/mens/ready-to-wear/c/10130US'
+    products_data = scrape_prada(prada_url)
