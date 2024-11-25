@@ -15,70 +15,178 @@ from selenium.common.exceptions import TimeoutException
 logging.basicConfig(level=logging.INFO)
 
 def setup_driver():
-    """Set up and return a configured Chrome WebDriver"""
+    """Set up and return a configured Chrome WebDriver with enhanced anti-bot measures"""
     chrome_options = Options()
     
-    # Basic options
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    
-    # Disable GPU completely
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--disable-gpu-sandbox')
-    chrome_options.add_argument('--disable-gpu-compositing')
-    chrome_options.add_argument('--disable-gl-drawing-for-tests')
-    
-    # Memory and performance options
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--no-zygote')
-    chrome_options.add_argument('--disable-setuid-sandbox')
-    chrome_options.add_argument('--disable-accelerated-2d-canvas')
-    chrome_options.add_argument('--disable-accelerated-jpeg-decoding')
-    chrome_options.add_argument('--disable-accelerated-mjpeg-decode')
-    chrome_options.add_argument('--disable-accelerated-video-decode')
-    chrome_options.add_argument('--disable-webgl')
-    chrome_options.add_argument('--disable-3d-apis')
-    
-    # Connection options
-    chrome_options.add_argument('--disable-ipc-flooding-protection')
-    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
-    chrome_options.add_argument('--disable-renderer-backgrounding')
-    
-    # Additional stability options
-    chrome_options.add_argument('--disable-features=NetworkService')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
-    chrome_options.add_argument('--disable-breakpad')
-    chrome_options.add_argument('--disable-component-update')
-    
-    # Window options
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--start-maximized')
-    chrome_options.add_argument('--hide-scrollbars')
-    
-    # Additional experimental options
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging'])
+    # Enhanced anti-bot measures
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
-    # Increase timeouts in prefs
-    chrome_options.add_experimental_option('prefs', {
-        'profile.default_content_setting_values.images': 1,
-        'profile.managed_default_content_settings.images': 1,
-        'profile.managed_default_content_settings.javascript': 1,
-        'profile.managed_default_content_settings.cookies': 1,
-        'profile.default_content_settings.cookies': 1,
-        'network.http.max-connections-per-server': 5
-    })
+    # More realistic user agents with full browser details
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 OPR/105.0.0.0'
+    ]
+    chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
+    
+    # Add more realistic browser characteristics
+    chrome_options.add_argument('--disable-notifications')
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--no-first-run')
+    chrome_options.add_argument('--no-default-browser-check')
+    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-sync')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--metrics-recording-only')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--start-maximized')
+    
+    # Add timezone and geolocation
+    chrome_options.add_argument('--timezone=America/New_York')
+    chrome_options.add_argument('--geolocation=40.7128,-74.0060')  # NYC coordinates
+    
+    # Add language and locale settings
+    chrome_options.add_argument('--lang=en-US')
+    chrome_options.add_argument('--accept-lang=en-US,en;q=0.9')
+    
+    # Add headers
+    chrome_options.add_argument('--accept=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
+    chrome_options.add_argument('--accept-encoding=gzip, deflate, br')
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
-    # Set various timeouts
-    driver.set_page_load_timeout(120)
-    driver.set_script_timeout(120)
-    driver.implicitly_wait(20)
+    # Execute CDP commands to mask webdriver and add more browser fingerprinting
+    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            // Overwrite the 'webdriver' property
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // Add language and platform details
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'Win32'
+            });
+            
+            // Add plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    return [
+                        {name: 'Chrome PDF Plugin'},
+                        {name: 'Chrome PDF Viewer'},
+                        {name: 'Native Client'}
+                    ];
+                }
+            });
+            
+            // Add chrome object
+            window.chrome = {
+                runtime: {},
+                webstore: {},
+                app: {
+                    InstallState: {
+                        DISABLED: 'disabled',
+                        INSTALLED: 'installed',
+                        NOT_INSTALLED: 'not_installed'
+                    },
+                    RunningState: {
+                        CANNOT_RUN: 'cannot_run',
+                        READY_TO_RUN: 'ready_to_run',
+                        RUNNING: 'running'
+                    },
+                    getDetails: function() {},
+                    getIsInstalled: function() {},
+                    installState: function() {},
+                    isInstalled: false,
+                    runningState: function() {}
+                }
+            };
+            
+            // Add permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+            );
+        '''
+    })
+    
+    # Add cookies
+    driver.execute_cdp_cmd('Network.enable', {})
+    driver.execute_cdp_cmd('Network.setExtraHTTPHeaders', {
+        'headers': {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'DNT': '1',
+            'Upgrade-Insecure-Requests': '1'
+        }
+    })
     
     return driver
+
+def add_random_delays():
+    """Add more varied random delays"""
+    delay = random.uniform(2, 5)
+    micro_delay = random.uniform(0, 0.5)
+    time.sleep(delay + micro_delay)
+
+def human_like_scroll(driver):
+    """More realistic human-like scrolling"""
+    total_height = driver.execute_script("return document.body.scrollHeight")
+    viewport_height = driver.execute_script("return window.innerHeight")
+    current_position = 0
+    
+    while current_position < total_height:
+        # Variable scroll speed and distance
+        scroll_amount = random.randint(200, 500)
+        scroll_time = random.uniform(500, 1500)  # milliseconds
+        current_position = min(current_position + scroll_amount, total_height)
+        
+        # Smooth scroll with variable speed
+        driver.execute_script(f"""
+            const start = window.pageYOffset;
+            const distance = {current_position} - start;
+            const duration = {scroll_time};
+            let startTime = null;
+            
+            function animation(currentTime) {{
+                if (startTime === null) startTime = currentTime;
+                const timeElapsed = currentTime - startTime;
+                const progress = Math.min(timeElapsed / duration, 1);
+                
+                window.scrollTo(0, start + distance * easeInOutQuad(progress));
+                
+                if (timeElapsed < duration) {{
+                    requestAnimationFrame(animation);
+                }}
+            }}
+            
+            function easeInOutQuad(t) {{
+                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+            }}
+            
+            requestAnimationFrame(animation);
+        """)
+        
+        # Random pauses and micro-movements
+        time.sleep(random.uniform(0.8, 2.0))
+        
+        # Sometimes move mouse randomly
+        if random.random() < 0.3:
+            element = driver.find_element(By.TAG_NAME, "body")
+            action = webdriver.ActionChains(driver)
+            action.move_to_element_with_offset(element, random.randint(0, 800), random.randint(0, 600))
+            action.perform()
+            time.sleep(random.uniform(0.1, 0.3))
 
 def scrape_products_from_page(driver, output_file):
     """Scrape products from the current page"""
@@ -86,7 +194,7 @@ def scrape_products_from_page(driver, output_file):
     
     try:
         # Wait for products to be visible and get them
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.js-product-tile-main-link")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -95,39 +203,44 @@ def scrape_products_from_page(driver, output_file):
         for card in product_cards:
             try:
                 # Extract product details
-                name = card.find_element(By.CSS_SELECTOR, ".product-card__name").text.strip()
-                price = card.find_element(By.CSS_SELECTOR, ".product-card__price").text.strip()
-                link = card.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
+                name = card.find_element(By.CSS_SELECTOR, ".js-product-tile-title a").text.strip()
+                
+                # Get price (handle both sale and regular prices)
+                try:
+                    price = card.find_element(By.CSS_SELECTOR, ".sales-price .nowrap").text.strip()
+                except:
+                    try:
+                        price = card.find_element(By.CSS_SELECTOR, ".standard-price .nowrap").text.strip()
+                    except:
+                        price = ""
+                
+                link = card.find_element(By.CSS_SELECTOR, ".js-product-tile-link").get_attribute("href")
                 
                 # Get images
                 try:
-                    # Try to get both main and hover images
-                    images = card.find_elements(By.CSS_SELECTOR, "img.product-card__picture")
-                    image_urls = []
-                    
-                    for img in images:
-                        # Get srcset attribute which contains high-res images
-                        srcset = img.get_attribute("srcset")
-                        if srcset:
-                            # Get the first (main) image URL from srcset
-                            image_url = srcset.split(',')[0].split(' ')[0]
-                            if image_url and not image_url.endswith('placeholder.svg'):
-                                image_urls.append(image_url)
+                    images = []
+                    # Get all images from infinite slider
+                    img_elements = card.find_elements(By.CSS_SELECTOR, ".infinite-slider-slide img")
+                    for img in img_elements:
+                        src = img.get_attribute("src")
+                        if src and "lacoste.com" in src and "placeholder" not in src:
+                            # Get highest resolution image by modifying URL parameters
+                            src = src.replace("imwidth=135", "imwidth=1000")
+                            images.append(src)
                     
                     # Remove duplicates while preserving order
-                    image_urls = list(dict.fromkeys(image_urls))
+                    images = list(dict.fromkeys(images))
                     
                 except Exception as img_error:
                     logging.warning(f"Error getting images: {str(img_error)}")
-                    image_urls = []
+                    images = []
                 
                 product = {
                     'Gender': 'Men',
-                    'name': name,
-                    'price': price,
-                    'link': link,
-                    'main_image': image_urls[0] if image_urls else '',
-                    'hover_image': image_urls[1] if len(image_urls) > 1 else ''
+                    'Name': name,
+                    'Price': price.replace('$', '').replace(',', '').strip(),
+                    'Images': ' | '.join(images),
+                    'Product URL': link
                 }
                 products.append(product)
                 
@@ -153,137 +266,85 @@ def scrape_products_from_page(driver, output_file):
         logging.error(f"Error in scrape_products_from_page: {str(e)}")
         return []
 
-def scroll_and_load_all_products(driver, wait):
-    """Scroll smoothly until absolute bottom is reached multiple times"""
-    total_products = 0
-    bottom_reached_count = 0
-    required_bottom_hits = 1  # Number of times we need to hit bottom
-    scroll_pause_time = 0.5  # Increased pause time
-    scroll_increment = 500  # Smaller increments for smoother scrolling
-    
-    while bottom_reached_count < required_bottom_hits:
-        try:
-            # Get current position
-            current_position = driver.execute_script("return window.pageYOffset")
-            total_height = driver.execute_script("return document.body.scrollHeight")
-            viewport_height = driver.execute_script("return window.innerHeight")
+def scroll_and_wait_for_images(driver):
+    """Scroll to bottom and ensure images are loaded"""
+    try:
+        # Scroll to bottom smoothly
+        total_height = driver.execute_script("return document.body.scrollHeight")
+        viewport_height = driver.execute_script("return window.innerHeight")
+        current_position = 0
+        
+        while current_position < total_height:
+            # Scroll in smaller increments
+            scroll_amount = 300
+            current_position = min(current_position + scroll_amount, total_height)
+            driver.execute_script(f"window.scrollTo(0, {current_position});")
+            time.sleep(0.3)  # Short pause between scrolls
             
-            # Smooth scroll down
-            next_position = min(current_position + scroll_increment, total_height - viewport_height)
-            driver.execute_script(f"window.scrollTo({{top: {next_position}, behavior: 'smooth'}});")
-            time.sleep(scroll_pause_time)
-            
-            # Wait for images to load
-            try:
-                wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "img.product-card__picture[srcset*='prada']")) > 0)
-            except:
-                pass
-            
-            # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "article.product-card"))
-            
-            if current_count > total_products:
-                total_products = current_count
-                bottom_reached_count = 0
-                logging.info(f"Found {current_count} products")
-            
-            # Check if we've hit bottom
-            if current_position + viewport_height >= total_height - 50:
-                bottom_reached_count += 1
-                logging.info(f"Bottom reached {bottom_reached_count}/{required_bottom_hits} times")
-                
-                if bottom_reached_count < required_bottom_hits:
-                    # Scroll back up to trigger more loading
-                    driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
-                    time.sleep(1)
-            
-        except Exception as e:
-            logging.warning(f"Error during scroll: {str(e)}")
-            time.sleep(0.5)
-            continue
-    
-    # Final scroll to top
-    driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
-    time.sleep(1)
-    
-    logging.info(f"Finished loading products. Total count: {total_products}")
-    return total_products
+            # Update total height as it might change
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height > total_height:
+                total_height = new_height
+        
+        # Wait for images to load
+        time.sleep(2)
+        
+        # Scroll back to top
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(1)
+        
+    except Exception as e:
+        logging.error(f"Error during scrolling: {str(e)}")
 
-def scrape_prada(base_url):
-    """Main function to scrape Prada products"""
-    retry_count = 0
-    max_retries = 3
+def scrape_lacoste(base_url):
+    """Main function to scrape Lacoste products"""
     page_num = 1
-    max_pages = 23
     products_data = []
     driver = None
     
     try:
-        # Initialize driver once
         driver = setup_driver()
         wait = WebDriverWait(driver, 10)
-        driver.set_page_load_timeout(5)
         
-        while retry_count < max_retries and page_num <= max_pages:
+        while True:  # Keep going until no products found
+            url = f"{base_url}?page={page_num}"
+            logging.info(f"Scraping page {page_num}: {url}")
+            
             try:
-                url = f"{base_url}/page/{page_num}"
-                logging.info(f"Scraping page {page_num}: {url}")
+                driver.get(url)
+                time.sleep(3)  # Wait for initial load
                 
-                try:
-                    driver.get(url)
-                except TimeoutException:
-                    pass
+                # Scroll and wait for images to load
+                scroll_and_wait_for_images(driver)
+                
+                # Now scrape products
+                products = scrape_products_from_page(driver, 'lacoste_women_products.csv')
+                
+                if not products:
+                    logging.info(f"No products found on page {page_num}, ending scrape")
+                    break
                     
-                time.sleep(5)
+                products_data.extend(products)
+                logging.info(f"Successfully scraped {len(products)} products from page {page_num}")
+                page_num += 1
                 
-                # Check if we're on the right page
-                if "prada.com" not in driver.current_url:
-                    logging.error(f"Redirected away from Prada site on page {page_num}")
-                    retry_count += 1
-                    continue
-                
-                # Scroll to load all images
-                total_products = scroll_and_load_all_products(driver, wait)
-                logging.info(f"Found {total_products} products after scrolling")
-                
-                # Wait a bit for images to finish loading
-                time.sleep(3)
-                    
-                # Scrape products from current page
-                try:
-                    products = scrape_products_from_page(driver, 'prada_men_products.csv')
-                    if products:
-                        products_data.extend(products)
-                        logging.info(f"Successfully scraped {len(products)} products from page {page_num}")
-                        page_num += 1  # Move to next page only on success
-                        retry_count = 0  # Reset retry count on success
-                    else:
-                        logging.error(f"No products found on page {page_num}")
-                        retry_count += 1
-                except Exception as e:
-                    logging.error(f"Error scraping page {page_num}: {str(e)}")
-                    retry_count += 1
-                    
             except Exception as e:
-                logging.error(f"Error during scraping page {page_num} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
-                retry_count += 1
-                time.sleep(random.uniform(10, 15))
+                logging.error(f"Error on page {page_num}: {str(e)}")
+                break
                 
             # Add delay between pages
-            time.sleep(random.uniform(3, 5))
+            time.sleep(2)
+            
+    except Exception as e:
+        logging.error(f"Error during scraping: {str(e)}")
         
     finally:
-        try:
-            if driver:
-                driver.quit()
-        except:
-            pass
-    
-    if retry_count == max_retries:
-        logging.error("Failed to scrape after maximum retries")
-        
+        if driver:
+            driver.quit()
+            
     return products_data
 
 if __name__ == "__main__":
-    prada_url = 'https://www.prada.com/us/en/mens/ready-to-wear/c/10130US'
-    products_data = scrape_prada(prada_url)
+    lacoste_url = 'https://www.lacoste.com/us/lacoste/women/clothing/'
+    products = scrape_lacoste(lacoste_url)
+    logging.info(f"Total products scraped: {len(products)}")
