@@ -148,8 +148,8 @@ def scrape_products_from_page(driver, output_file):
     try:
         # Wait for products to be visible and get them
         wait = WebDriverWait(driver, 10)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-tile__card")))
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product-tile")
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "li.grid-tile")))
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "li.grid-tile")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -157,47 +157,54 @@ def scrape_products_from_page(driver, output_file):
             
         for card in product_cards:
             try:
+                # Scroll element into view and wait for images to load
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", card)
+                time.sleep(1)  # Wait for images to start loading
+                
                 # Extract product details
                 try:
-                    # Get name from product title
-                    name = card.find_element(By.CSS_SELECTOR, "h2.product-tile__name").text.strip()
+                    name = card.find_element(By.CSS_SELECTOR, ".product-infos h2.product-name").text.strip()
                 except:
                     logging.warning("Could not get name")
                     continue
                 
-                # Get price
                 try:
-                    price = card.find_element(By.CSS_SELECTOR, "span.product-tile__price").text.strip()
+                    price = card.find_element(By.CSS_SELECTOR, ".product-price .price-sales").text.strip()
                 except:
                     logging.warning("Could not get price")
                     continue
                 
-                # Get link
                 try:
-                    link = card.find_element(By.CSS_SELECTOR, "a.product-tile__link").get_attribute("href")
+                    link = card.find_element(By.CSS_SELECTOR, "figure.product-image a.thumb-link").get_attribute("href")
                 except:
                     logging.warning("Could not get link")
                     continue
                 
-                # Get images
+                # Get images - updated selector and logic
                 try:
                     images = []
-                    # Get all carousel images
-                    img_elements = card.find_elements(By.CSS_SELECTOR, "img.carousel-image")
+                    # Wait for images to be present
+                    img_elements = WebDriverWait(card, 5).until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".thumb-image-wrap img.thumb-img"))
+                    )
                     
                     for img in img_elements:
-                        # Try to get data-quality-img first
-                        quality_img = img.get_attribute("data-quality-img")
-                        if quality_img and "moncler-cdn.thron.com" in quality_img:
-                            images.append(quality_img)
-                            continue
-                        
-                        # If no quality image, try src
-                        src = img.get_attribute("src")
-                        if src and "moncler-cdn.thron.com" in src:
-                            # Get highest resolution version
-                            high_res_src = src.replace("30x45", "1024x1536").replace("quality=80", "quality=100")
-                            images.append(high_res_src)
+                        # Try srcset first
+                        srcset = img.get_attribute("srcset")
+                        if srcset and not srcset.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                            # Parse srcset to get highest resolution URL
+                            urls = [url.strip().split(' ')[0] for url in srcset.split(',')]
+                            if urls:
+                                images.append(urls[-1])  # Get highest resolution URL
+                                continue
+                                
+                        # Try data-srcset if srcset is not available
+                        data_srcset = img.get_attribute("data-srcset")
+                        if data_srcset and not data_srcset.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                            urls = [url.strip().split(' ')[0] for url in data_srcset.split(',')]
+                            if urls:
+                                images.append(urls[-1])
+                                continue
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -208,7 +215,7 @@ def scrape_products_from_page(driver, output_file):
                 
                 if name and price and link:  # Only add if we have all required fields
                     product = {
-                        'Gender': 'Women',
+                        'Gender': 'Women',  # Adjust based on the URL being scraped
                         'Name': name,
                         'Price': price.replace('$', '').replace(',', '').strip(),
                         'Images': ' | '.join(images),
@@ -251,17 +258,29 @@ def scroll_and_load_all_products(driver, wait):
     
     while no_new_products_count < max_attempts:
         try:
-            # Scroll to bottom smoothly
-            driver.execute_script("""
-                window.scrollTo({
-                    top: document.body.scrollHeight,
-                    behavior: 'smooth'
-                });
-            """)
-            time.sleep(2)  # Wait for new products to load
+            # Get current scroll position
+            current_position = driver.execute_script("return window.pageYOffset;")
+            
+            # Scroll in smaller increments
+            for _ in range(4):  # Scroll in 4 steps
+                # Calculate next scroll position (25% of remaining page height each time)
+                scroll_height = driver.execute_script("return document.body.scrollHeight;")
+                next_position = current_position + (scroll_height - current_position) / 4
+                
+                # Smooth scroll to next position
+                driver.execute_script(f"""
+                    window.scrollTo({{
+                        top: {next_position},
+                        behavior: 'smooth'
+                    }});
+                """)
+                time.sleep(1)  # Wait for scroll and images to load
+                current_position = next_position
+            
+            time.sleep(2)  # Additional wait for new products to load
             
             # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product-tile__card"))
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "li.grid-tile"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -278,8 +297,8 @@ def scroll_and_load_all_products(driver, wait):
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_moncler(url):
-    """Main function to scrape Moncler products"""
+def scrape_givenchy(url):
+    """Main function to scrape Givenchy products"""
     products_data = []
     driver = None
     
@@ -295,8 +314,8 @@ def scrape_moncler(url):
         time.sleep(5)
         
         # Check if we're on the right page
-        if "moncler.com" not in driver.current_url:
-            logging.error("Redirected away from Moncler site")
+        if "givenchy.com" not in driver.current_url:
+            logging.error("Redirected away from Givenchy site")
             return products_data
         
         # Load all products by scrolling
@@ -307,7 +326,7 @@ def scrape_moncler(url):
         time.sleep(3)
         
         # Scrape all products
-        products = scrape_products_from_page(driver, 'moncler_women_products.csv')
+        products = scrape_products_from_page(driver, 'givenchy_women_products.csv')
         if products:
             products_data.extend(products)
             logging.info(f"Successfully scraped {len(products)} products")
@@ -324,6 +343,6 @@ def scrape_moncler(url):
     return products_data
 
 if __name__ == "__main__":
-    moncler_url = 'https://www.moncler.com/en-us/women/ready-to-wear'
-    products = scrape_moncler(moncler_url)
+    givenchy_url = 'https://www.givenchy.com/us/en-US/women/ready-to-wear/?page=16'
+    products = scrape_givenchy(givenchy_url)
     logging.info(f"Total products scraped: {len(products)}")
