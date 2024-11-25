@@ -194,7 +194,7 @@ def scrape_products_from_page(driver, output_file):
     
     try:
         # Wait for products to be visible and get them
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product-tile")
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -203,44 +203,38 @@ def scrape_products_from_page(driver, output_file):
         for card in product_cards:
             try:
                 # Extract product details
-                name = card.find_element(By.CSS_SELECTOR, ".pdp-link .link").text.strip()
+                name_elements = [
+                    card.find_element(By.CSS_SELECTOR, ".pdp-link .link").text.strip(),
+                    card.find_element(By.CSS_SELECTOR, ".c-tiles__tile-body-type").text.strip()
+                ]
+                name = " - ".join(filter(None, name_elements))
                 
-                # Get price (handle both sale and regular prices)
+                # Get price
                 try:
                     price = card.find_element(By.CSS_SELECTOR, ".sales .value").text.strip()
                 except:
-                    try:
-                        price = card.find_element(By.CSS_SELECTOR, ".price .value").text.strip()
-                    except:
-                        price = ""
+                    price = ""
                 
                 link = card.find_element(By.CSS_SELECTOR, ".pdp-link .link").get_attribute("href")
                 
                 # Get images
                 try:
                     images = []
-                    # Get both primary and hover images
-                    img_elements = card.find_elements(By.CSS_SELECTOR, ".tile-image-container img")
-                    for img in img_elements:
-                        # Try to get src first
-                        src = img.get_attribute("src")
-                        if src and "tom_ford" in src:
-                            # Get highest resolution by modifying URL
-                            high_res_src = src + "?w=2307"
-                            images.append(high_res_src)
-                            continue
-                            
-                        # If no src, try srcset
-                        srcset = img.get_attribute("srcset")
-                        if srcset:
-                            # Get highest resolution image from srcset
-                            srcset_urls = srcset.split(',')
-                            for url in srcset_urls:
-                                if "2307w" in url:
-                                    highest_res = url.split(' ')[0].strip()
-                                    if highest_res and "tom_ford" in highest_res:
-                                        images.append(highest_res)
-                                        break
+                    # Get main image
+                    main_img = card.find_element(By.CSS_SELECTOR, ".c-lazyload__image:not(.hover)")
+                    main_src = main_img.get_attribute("src")
+                    if main_src and "fendi.com" in main_src:
+                        # Ensure highest resolution
+                        high_res_main = main_src.split('?')[0] + "?wid=1000&hei=1000"
+                        images.append(high_res_main)
+                    
+                    # Get hover image
+                    hover_img = card.find_element(By.CSS_SELECTOR, ".c-lazyload__image.hover")
+                    hover_src = hover_img.get_attribute("data-src") or hover_img.get_attribute("src")
+                    if hover_src and "fendi.com" in hover_src:
+                        # Ensure highest resolution
+                        high_res_hover = hover_src.split('?')[0] + "?wid=1000&hei=1000"
+                        images.append(high_res_hover)
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -250,7 +244,7 @@ def scrape_products_from_page(driver, output_file):
                     images = []
                 
                 product = {
-                    'Gender': 'Women',
+                    'Gender': 'Men',
                     'Name': name,
                     'Price': price.replace('$', '').replace(',', '').strip(),
                     'Images': ' | '.join(images),
@@ -298,7 +292,7 @@ def scroll_and_load_all_products(driver, wait):
             time.sleep(2)  # Wait for new products to load
             
             # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product-tile"))
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -315,8 +309,8 @@ def scroll_and_load_all_products(driver, wait):
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_tomford(url):
-    """Main function to scrape Tom Ford products"""
+def scrape_fendi(url):
+    """Main function to scrape Fendi products"""
     products_data = []
     driver = None
     
@@ -331,11 +325,6 @@ def scrape_tomford(url):
             
         time.sleep(5)
         
-        # # Check if we're on the right page
-        # if "tomford.com" not in driver.current_url:
-        #     logging.error("Redirected away from Tom Ford site")
-        #     return products_data
-        
         # Load all products by scrolling
         total_products = scroll_and_load_all_products(driver, wait)
         logging.info(f"Found {total_products} total products")
@@ -344,7 +333,7 @@ def scrape_tomford(url):
         time.sleep(3)
         
         # Scrape all products
-        products = scrape_products_from_page(driver, 'tomford_women_products.csv')
+        products = scrape_products_from_page(driver, 'fendi_men_products.csv')
         if products:
             products_data.extend(products)
             logging.info(f"Successfully scraped {len(products)} products")
@@ -361,6 +350,6 @@ def scrape_tomford(url):
     return products_data
 
 if __name__ == "__main__":
-    tomford_url = 'https://www.tomfordfashion.com/en-us/women/ready-to-wear/?start=0&sz=418'
-    products = scrape_tomford(tomford_url)
+    fendi_url = 'https://www.fendi.com/us-en/man/ready-to-wear?start=0&sz=1000'
+    products = scrape_fendi(fendi_url)
     logging.info(f"Total products scraped: {len(products)}")
