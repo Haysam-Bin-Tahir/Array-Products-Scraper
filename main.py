@@ -194,7 +194,7 @@ def scrape_products_from_page(driver, output_file):
     
     try:
         # Wait for products to be visible and get them
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product")
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.l-productgrid__item")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -203,38 +203,49 @@ def scrape_products_from_page(driver, output_file):
         for card in product_cards:
             try:
                 # Extract product details
-                name_elements = [
-                    card.find_element(By.CSS_SELECTOR, ".pdp-link .link").text.strip(),
-                    card.find_element(By.CSS_SELECTOR, ".c-tiles__tile-body-type").text.strip()
-                ]
-                name = " - ".join(filter(None, name_elements))
+                name = card.find_element(By.CSS_SELECTOR, "h2.c-product__name").text.strip()
                 
                 # Get price
                 try:
-                    price = card.find_element(By.CSS_SELECTOR, ".sales .value").text.strip()
+                    price = card.find_element(By.CSS_SELECTOR, "p.c-price__value--current").text.strip()
                 except:
                     price = ""
                 
-                link = card.find_element(By.CSS_SELECTOR, ".pdp-link .link").get_attribute("href")
+                link = card.find_element(By.CSS_SELECTOR, "a.c-product__link").get_attribute("href")
                 
                 # Get images
                 try:
                     images = []
-                    # Get main image
-                    main_img = card.find_element(By.CSS_SELECTOR, ".c-lazyload__image:not(.hover)")
-                    main_src = main_img.get_attribute("src")
-                    if main_src and "fendi.com" in main_src:
-                        # Ensure highest resolution
-                        high_res_main = main_src.split('?')[0] + "?wid=1000&hei=1000"
-                        images.append(high_res_main)
+                    # Get all carousel images from the container
+                    carousel = card.find_element(By.CSS_SELECTOR, "div.c-product__imagecontainer")
+                    img_elements = carousel.find_elements(By.CSS_SELECTOR, "img.c-product__image")
                     
-                    # Get hover image
-                    hover_img = card.find_element(By.CSS_SELECTOR, ".c-lazyload__image.hover")
-                    hover_src = hover_img.get_attribute("data-src") or hover_img.get_attribute("src")
-                    if hover_src and "fendi.com" in hover_src:
-                        # Ensure highest resolution
-                        high_res_hover = hover_src.split('?')[0] + "?wid=1000&hei=1000"
-                        images.append(high_res_hover)
+                    for img in img_elements:
+                        # Try to get data-srcset first (for lazy loaded images)
+                        srcset = img.get_attribute("data-srcset") or img.get_attribute("srcset")
+                        if srcset and "bottega-veneta.dam.kering.com" in srcset:
+                            # Split srcset and find highest resolution URL
+                            srcset_parts = srcset.split(',')
+                            highest_res_url = None
+                            highest_width = 0
+                            
+                            for part in srcset_parts:
+                                part = part.strip()
+                                if not part:
+                                    continue
+                                    
+                                # Extract URL and width
+                                url_width = part.split(' ')
+                                if len(url_width) >= 2:
+                                    url = url_width[0]
+                                    width = int(url_width[1].replace('w', ''))
+                                    
+                                    if width > highest_width:
+                                        highest_width = width
+                                        highest_res_url = url
+                            
+                            if highest_res_url:
+                                images.append(highest_res_url)
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -243,14 +254,16 @@ def scrape_products_from_page(driver, output_file):
                     logging.warning(f"Error getting images: {str(img_error)}")
                     images = []
                 
-                product = {
-                    'Gender': 'Men',
-                    'Name': name,
-                    'Price': price.replace('$', '').replace(',', '').strip(),
-                    'Images': ' | '.join(images),
-                    'Product URL': link
-                }
-                products.append(product)
+                if name and price and link:  # Only add if we have all required fields
+                    product = {
+                        'Gender': 'Men',
+                        'Name': name,
+                        'Price': price.replace('$', '').replace(',', '').strip(),
+                        'Images': ' | '.join(images),
+                        'Product URL': link
+                    }
+                    products.append(product)
+                    logging.info(f"Scraped product: {name} with {len(images)} images")
                 
             except Exception as e:
                 logging.warning(f"Error scraping individual product: {str(e)}")
@@ -292,7 +305,7 @@ def scroll_and_load_all_products(driver, wait):
             time.sleep(2)  # Wait for new products to load
             
             # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product"))
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "article.c-product"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -309,8 +322,8 @@ def scroll_and_load_all_products(driver, wait):
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_fendi(url):
-    """Main function to scrape Fendi products"""
+def scrape_bottegaveneta(url):
+    """Main function to scrape Bottega Veneta products"""
     products_data = []
     driver = None
     
@@ -325,6 +338,11 @@ def scrape_fendi(url):
             
         time.sleep(5)
         
+        # Check if we're on the right page
+        if "bottegaveneta.com" not in driver.current_url:
+            logging.error("Redirected away from Bottega Veneta site")
+            return products_data
+        
         # Load all products by scrolling
         total_products = scroll_and_load_all_products(driver, wait)
         logging.info(f"Found {total_products} total products")
@@ -333,7 +351,7 @@ def scrape_fendi(url):
         time.sleep(3)
         
         # Scrape all products
-        products = scrape_products_from_page(driver, 'fendi_men_products.csv')
+        products = scrape_products_from_page(driver, 'bottegaveneta_men_products.csv')
         if products:
             products_data.extend(products)
             logging.info(f"Successfully scraped {len(products)} products")
@@ -350,6 +368,6 @@ def scrape_fendi(url):
     return products_data
 
 if __name__ == "__main__":
-    fendi_url = 'https://www.fendi.com/us-en/man/ready-to-wear?start=0&sz=1000'
-    products = scrape_fendi(fendi_url)
+    bottegaveneta_url = 'https://www.bottegaveneta.com/en-us/men/clothing?sz=1000&start=0'
+    products = scrape_bottegaveneta(bottegaveneta_url)
     logging.info(f"Total products scraped: {len(products)}")
