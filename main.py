@@ -194,7 +194,7 @@ def scrape_products_from_page(driver, output_file):
     
     try:
         # Wait for products to be visible and get them
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.js-product-tile-main-link")
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product-tile")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -203,30 +203,44 @@ def scrape_products_from_page(driver, output_file):
         for card in product_cards:
             try:
                 # Extract product details
-                name = card.find_element(By.CSS_SELECTOR, ".js-product-tile-title a").text.strip()
+                name = card.find_element(By.CSS_SELECTOR, ".pdp-link .link").text.strip()
                 
                 # Get price (handle both sale and regular prices)
                 try:
-                    price = card.find_element(By.CSS_SELECTOR, ".sales-price .nowrap").text.strip()
+                    price = card.find_element(By.CSS_SELECTOR, ".sales .value").text.strip()
                 except:
                     try:
-                        price = card.find_element(By.CSS_SELECTOR, ".standard-price .nowrap").text.strip()
+                        price = card.find_element(By.CSS_SELECTOR, ".price .value").text.strip()
                     except:
                         price = ""
                 
-                link = card.find_element(By.CSS_SELECTOR, ".js-product-tile-link").get_attribute("href")
+                link = card.find_element(By.CSS_SELECTOR, ".pdp-link .link").get_attribute("href")
                 
                 # Get images
                 try:
                     images = []
-                    # Get all images from infinite slider
-                    img_elements = card.find_elements(By.CSS_SELECTOR, ".infinite-slider-slide img")
+                    # Get both primary and hover images
+                    img_elements = card.find_elements(By.CSS_SELECTOR, ".tile-image-container img")
                     for img in img_elements:
+                        # Try to get src first
                         src = img.get_attribute("src")
-                        if src and "lacoste.com" in src and "placeholder" not in src:
-                            # Get highest resolution image by modifying URL parameters
-                            src = src.replace("imwidth=135", "imwidth=1000")
-                            images.append(src)
+                        if src and "tom_ford" in src:
+                            # Get highest resolution by modifying URL
+                            high_res_src = src + "?w=2307"
+                            images.append(high_res_src)
+                            continue
+                            
+                        # If no src, try srcset
+                        srcset = img.get_attribute("srcset")
+                        if srcset:
+                            # Get highest resolution image from srcset
+                            srcset_urls = srcset.split(',')
+                            for url in srcset_urls:
+                                if "2307w" in url:
+                                    highest_res = url.split(' ')[0].strip()
+                                    if highest_res and "tom_ford" in highest_res:
+                                        images.append(highest_res)
+                                        break
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -236,7 +250,7 @@ def scrape_products_from_page(driver, output_file):
                     images = []
                 
                 product = {
-                    'Gender': 'Men',
+                    'Gender': 'Women',
                     'Name': name,
                     'Price': price.replace('$', '').replace(',', '').strip(),
                     'Images': ' | '.join(images),
@@ -266,39 +280,43 @@ def scrape_products_from_page(driver, output_file):
         logging.error(f"Error in scrape_products_from_page: {str(e)}")
         return []
 
-def scroll_and_wait_for_images(driver):
-    """Scroll to bottom and ensure images are loaded"""
-    try:
-        # Scroll to bottom smoothly
-        total_height = driver.execute_script("return document.body.scrollHeight")
-        viewport_height = driver.execute_script("return window.innerHeight")
-        current_position = 0
-        
-        while current_position < total_height:
-            # Scroll in smaller increments
-            scroll_amount = 300
-            current_position = min(current_position + scroll_amount, total_height)
-            driver.execute_script(f"window.scrollTo(0, {current_position});")
-            time.sleep(0.3)  # Short pause between scrolls
+def scroll_and_load_all_products(driver, wait):
+    """Scroll until no more products load"""
+    total_products = 0
+    no_new_products_count = 0
+    max_attempts = 3
+    
+    while no_new_products_count < max_attempts:
+        try:
+            # Scroll to bottom smoothly
+            driver.execute_script("""
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            """)
+            time.sleep(2)  # Wait for new products to load
             
-            # Update total height as it might change
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height > total_height:
-                total_height = new_height
-        
-        # Wait for images to load
-        time.sleep(2)
-        
-        # Scroll back to top
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
-        
-    except Exception as e:
-        logging.error(f"Error during scrolling: {str(e)}")
+            # Get current product count
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product-tile"))
+            
+            if current_count > total_products:
+                total_products = current_count
+                no_new_products_count = 0
+                logging.info(f"Found {current_count} products")
+            else:
+                no_new_products_count += 1
+                logging.info(f"No new products found, attempt {no_new_products_count}/{max_attempts}")
+            
+        except Exception as e:
+            logging.warning(f"Error during scroll: {str(e)}")
+            no_new_products_count += 1
+    
+    logging.info(f"Finished loading products. Total count: {total_products}")
+    return total_products
 
-def scrape_lacoste(base_url):
-    """Main function to scrape Lacoste products"""
-    page_num = 1
+def scrape_tomford(url):
+    """Main function to scrape Tom Ford products"""
     products_data = []
     driver = None
     
@@ -306,34 +324,32 @@ def scrape_lacoste(base_url):
         driver = setup_driver()
         wait = WebDriverWait(driver, 10)
         
-        while True:  # Keep going until no products found
-            url = f"{base_url}?page={page_num}"
-            logging.info(f"Scraping page {page_num}: {url}")
+        try:
+            driver.get(url)
+        except TimeoutException:
+            pass
             
-            try:
-                driver.get(url)
-                time.sleep(3)  # Wait for initial load
-                
-                # Scroll and wait for images to load
-                scroll_and_wait_for_images(driver)
-                
-                # Now scrape products
-                products = scrape_products_from_page(driver, 'lacoste_women_products.csv')
-                
-                if not products:
-                    logging.info(f"No products found on page {page_num}, ending scrape")
-                    break
-                    
-                products_data.extend(products)
-                logging.info(f"Successfully scraped {len(products)} products from page {page_num}")
-                page_num += 1
-                
-            except Exception as e:
-                logging.error(f"Error on page {page_num}: {str(e)}")
-                break
-                
-            # Add delay between pages
-            time.sleep(2)
+        time.sleep(5)
+        
+        # # Check if we're on the right page
+        # if "tomford.com" not in driver.current_url:
+        #     logging.error("Redirected away from Tom Ford site")
+        #     return products_data
+        
+        # Load all products by scrolling
+        total_products = scroll_and_load_all_products(driver, wait)
+        logging.info(f"Found {total_products} total products")
+        
+        # Wait for images to load
+        time.sleep(3)
+        
+        # Scrape all products
+        products = scrape_products_from_page(driver, 'tomford_women_products.csv')
+        if products:
+            products_data.extend(products)
+            logging.info(f"Successfully scraped {len(products)} products")
+        else:
+            logging.error("No products found")
             
     except Exception as e:
         logging.error(f"Error during scraping: {str(e)}")
@@ -345,6 +361,6 @@ def scrape_lacoste(base_url):
     return products_data
 
 if __name__ == "__main__":
-    lacoste_url = 'https://www.lacoste.com/us/lacoste/women/clothing/'
-    products = scrape_lacoste(lacoste_url)
+    tomford_url = 'https://www.tomfordfashion.com/en-us/women/ready-to-wear/?start=0&sz=418'
+    products = scrape_tomford(tomford_url)
     logging.info(f"Total products scraped: {len(products)}")
