@@ -15,123 +15,76 @@ from selenium.common.exceptions import TimeoutException
 logging.basicConfig(level=logging.INFO)
 
 def setup_driver():
-    """Set up and return a configured Chrome WebDriver with enhanced anti-bot measures"""
+    """Set up and return a configured Chrome WebDriver"""
     chrome_options = Options()
     
-    # Enhanced anti-bot measures
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    
-    # More realistic user agents with full browser details
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 OPR/105.0.0.0'
-    ]
-    chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
-    
-    # Add more realistic browser characteristics
-    chrome_options.add_argument('--disable-notifications')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--no-first-run')
-    chrome_options.add_argument('--no-default-browser-check')
-    chrome_options.add_argument('--disable-background-networking')
-    chrome_options.add_argument('--disable-sync')
-    chrome_options.add_argument('--disable-translate')
-    chrome_options.add_argument('--metrics-recording-only')
-    chrome_options.add_argument('--disable-default-apps')
+    # Basic options
     chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    
+    # Disable performance monitoring and logging
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-breakpad')
+    chrome_options.add_argument('--disable-component-extensions-with-background-pages')
+    chrome_options.add_argument('--disable-features=TranslateUI,BlinkGenPropertyTrees')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    chrome_options.add_argument('--enable-features=NetworkService,NetworkServiceInProcess')
+    chrome_options.add_argument('--force-color-profile=srgb')
+    chrome_options.add_argument('--metrics-recording-only')
+    chrome_options.add_argument('--no-first-run')
+    
+    # Memory management
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-software-rasterizer')
+    
+    # Window options
+    chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--start-maximized')
     
-    # Add timezone and geolocation
-    chrome_options.add_argument('--timezone=America/New_York')
-    chrome_options.add_argument('--geolocation=40.7128,-74.0060')  # NYC coordinates
+    # Disable logging
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    chrome_options.add_argument('--log-level=3')
+    chrome_options.add_argument('--silent')
     
-    # Add language and locale settings
-    chrome_options.add_argument('--lang=en-US')
-    chrome_options.add_argument('--accept-lang=en-US,en;q=0.9')
+    # Performance preferences
+    prefs = {
+        'profile.default_content_setting_values.images': 1,
+        'profile.managed_default_content_settings.images': 1,
+        'profile.managed_default_content_settings.javascript': 1,
+        'profile.default_content_settings.cookies': 1,
+        'profile.managed_default_content_settings.cookies': 1,
+        'profile.managed_default_content_settings.plugins': 1,
+        'profile.managed_default_content_settings.popups': 1,
+        'profile.managed_default_content_settings.geolocation': 2,
+        'profile.managed_default_content_settings.notifications': 2,
+        'profile.default_content_settings.automatic_downloads': 1,
+        'profile.default_content_settings.mixed_script': 1,
+        'profile.default_content_settings.media_stream': 1,
+        'profile.default_content_settings.media_stream_mic': 1,
+        'profile.default_content_settings.media_stream_camera': 1,
+        'profile.default_content_settings.protocol_handlers': 1,
+        'profile.default_content_settings.ppapi_broker': 1,
+        'profile.default_content_settings.automatic_downloads': 1,
+        'profile.default_content_settings.midi_sysex': 1,
+        'profile.default_content_settings.push_messaging': 1,
+        'profile.default_content_settings.ssl_cert_decisions': 1,
+        'profile.default_content_settings.metro_switch_to_desktop': 1,
+        'profile.default_content_settings.protected_media_identifier': 1,
+        'profile.default_content_settings.site_engagement': 1,
+        'profile.default_content_settings.durable_storage': 1
+    }
+    chrome_options.add_experimental_option('prefs', prefs)
     
-    # Add headers
-    chrome_options.add_argument('--accept=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
-    chrome_options.add_argument('--accept-encoding=gzip, deflate, br')
-    
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    # Execute CDP commands to mask webdriver and add more browser fingerprinting
-    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-        'source': '''
-            // Overwrite the 'webdriver' property
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            
-            // Add language and platform details
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
-            
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'Win32'
-            });
-            
-            // Add plugins
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => {
-                    return [
-                        {name: 'Chrome PDF Plugin'},
-                        {name: 'Chrome PDF Viewer'},
-                        {name: 'Native Client'}
-                    ];
-                }
-            });
-            
-            // Add chrome object
-            window.chrome = {
-                runtime: {},
-                webstore: {},
-                app: {
-                    InstallState: {
-                        DISABLED: 'disabled',
-                        INSTALLED: 'installed',
-                        NOT_INSTALLED: 'not_installed'
-                    },
-                    RunningState: {
-                        CANNOT_RUN: 'cannot_run',
-                        READY_TO_RUN: 'ready_to_run',
-                        RUNNING: 'running'
-                    },
-                    getDetails: function() {},
-                    getIsInstalled: function() {},
-                    installState: function() {},
-                    isInstalled: false,
-                    runningState: function() {}
-                }
-            };
-            
-            // Add permissions
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                Promise.resolve({ state: Notification.permission }) :
-                originalQuery(parameters)
-            );
-        '''
-    })
-    
-    # Add cookies
-    driver.execute_cdp_cmd('Network.enable', {})
-    driver.execute_cdp_cmd('Network.setExtraHTTPHeaders', {
-        'headers': {
-            'Accept-Language': 'en-US,en;q=0.9',
-            'DNT': '1',
-            'Upgrade-Insecure-Requests': '1'
-        }
-    })
-    
-    return driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
+        return driver
+    except Exception as e:
+        logging.error(f"Error setting up Chrome driver: {str(e)}")
+        raise
 
 def add_random_delays():
     """Add more varied random delays"""
@@ -194,7 +147,9 @@ def scrape_products_from_page(driver, output_file):
     
     try:
         # Wait for products to be visible and get them
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.l-productgrid__item")
+        wait = WebDriverWait(driver, 10)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-tile__card")))
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product-tile")
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -203,49 +158,46 @@ def scrape_products_from_page(driver, output_file):
         for card in product_cards:
             try:
                 # Extract product details
-                name = card.find_element(By.CSS_SELECTOR, "h2.c-product__name").text.strip()
+                try:
+                    # Get name from product title
+                    name = card.find_element(By.CSS_SELECTOR, "h2.product-tile__name").text.strip()
+                except:
+                    logging.warning("Could not get name")
+                    continue
                 
                 # Get price
                 try:
-                    price = card.find_element(By.CSS_SELECTOR, "p.c-price__value--current").text.strip()
+                    price = card.find_element(By.CSS_SELECTOR, "span.product-tile__price").text.strip()
                 except:
-                    price = ""
+                    logging.warning("Could not get price")
+                    continue
                 
-                link = card.find_element(By.CSS_SELECTOR, "a.c-product__link").get_attribute("href")
+                # Get link
+                try:
+                    link = card.find_element(By.CSS_SELECTOR, "a.product-tile__link").get_attribute("href")
+                except:
+                    logging.warning("Could not get link")
+                    continue
                 
                 # Get images
                 try:
                     images = []
-                    # Get all carousel images from the container
-                    carousel = card.find_element(By.CSS_SELECTOR, "div.c-product__imagecontainer")
-                    img_elements = carousel.find_elements(By.CSS_SELECTOR, "img.c-product__image")
+                    # Get all carousel images
+                    img_elements = card.find_elements(By.CSS_SELECTOR, "img.carousel-image")
                     
                     for img in img_elements:
-                        # Try to get data-srcset first (for lazy loaded images)
-                        srcset = img.get_attribute("data-srcset") or img.get_attribute("srcset")
-                        if srcset and "bottega-veneta.dam.kering.com" in srcset:
-                            # Split srcset and find highest resolution URL
-                            srcset_parts = srcset.split(',')
-                            highest_res_url = None
-                            highest_width = 0
-                            
-                            for part in srcset_parts:
-                                part = part.strip()
-                                if not part:
-                                    continue
-                                    
-                                # Extract URL and width
-                                url_width = part.split(' ')
-                                if len(url_width) >= 2:
-                                    url = url_width[0]
-                                    width = int(url_width[1].replace('w', ''))
-                                    
-                                    if width > highest_width:
-                                        highest_width = width
-                                        highest_res_url = url
-                            
-                            if highest_res_url:
-                                images.append(highest_res_url)
+                        # Try to get data-quality-img first
+                        quality_img = img.get_attribute("data-quality-img")
+                        if quality_img and "moncler-cdn.thron.com" in quality_img:
+                            images.append(quality_img)
+                            continue
+                        
+                        # If no quality image, try src
+                        src = img.get_attribute("src")
+                        if src and "moncler-cdn.thron.com" in src:
+                            # Get highest resolution version
+                            high_res_src = src.replace("30x45", "1024x1536").replace("quality=80", "quality=100")
+                            images.append(high_res_src)
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -256,7 +208,7 @@ def scrape_products_from_page(driver, output_file):
                 
                 if name and price and link:  # Only add if we have all required fields
                     product = {
-                        'Gender': 'Men',
+                        'Gender': 'Women',
                         'Name': name,
                         'Price': price.replace('$', '').replace(',', '').strip(),
                         'Images': ' | '.join(images),
@@ -264,6 +216,8 @@ def scrape_products_from_page(driver, output_file):
                     }
                     products.append(product)
                     logging.info(f"Scraped product: {name} with {len(images)} images")
+                else:
+                    logging.warning(f"Missing required fields - Name: {bool(name)}, Price: {bool(price)}, Link: {bool(link)}")
                 
             except Exception as e:
                 logging.warning(f"Error scraping individual product: {str(e)}")
@@ -280,6 +234,8 @@ def scrape_products_from_page(driver, output_file):
                 df.to_csv(output_file, index=False)
                 
             logging.info(f"Saved {len(products)} products to {output_file}")
+        else:
+            logging.warning("No products were successfully scraped")
             
         return products
         
@@ -305,7 +261,7 @@ def scroll_and_load_all_products(driver, wait):
             time.sleep(2)  # Wait for new products to load
             
             # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "article.c-product"))
+            current_count = len(driver.find_elements(By.CSS_SELECTOR, "div.product-tile__card"))
             
             if current_count > total_products:
                 total_products = current_count
@@ -322,8 +278,8 @@ def scroll_and_load_all_products(driver, wait):
     logging.info(f"Finished loading products. Total count: {total_products}")
     return total_products
 
-def scrape_bottegaveneta(url):
-    """Main function to scrape Bottega Veneta products"""
+def scrape_moncler(url):
+    """Main function to scrape Moncler products"""
     products_data = []
     driver = None
     
@@ -339,8 +295,8 @@ def scrape_bottegaveneta(url):
         time.sleep(5)
         
         # Check if we're on the right page
-        if "bottegaveneta.com" not in driver.current_url:
-            logging.error("Redirected away from Bottega Veneta site")
+        if "moncler.com" not in driver.current_url:
+            logging.error("Redirected away from Moncler site")
             return products_data
         
         # Load all products by scrolling
@@ -351,7 +307,7 @@ def scrape_bottegaveneta(url):
         time.sleep(3)
         
         # Scrape all products
-        products = scrape_products_from_page(driver, 'bottegaveneta_men_products.csv')
+        products = scrape_products_from_page(driver, 'moncler_women_products.csv')
         if products:
             products_data.extend(products)
             logging.info(f"Successfully scraped {len(products)} products")
@@ -368,6 +324,6 @@ def scrape_bottegaveneta(url):
     return products_data
 
 if __name__ == "__main__":
-    bottegaveneta_url = 'https://www.bottegaveneta.com/en-us/men/clothing?sz=1000&start=0'
-    products = scrape_bottegaveneta(bottegaveneta_url)
+    moncler_url = 'https://www.moncler.com/en-us/women/ready-to-wear'
+    products = scrape_moncler(moncler_url)
     logging.info(f"Total products scraped: {len(products)}")
