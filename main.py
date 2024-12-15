@@ -94,62 +94,36 @@ def add_random_delays():
 
 def human_like_scroll(driver):
     """More realistic human-like scrolling"""
-    total_height = driver.execute_script("return document.body.scrollHeight")
-    viewport_height = driver.execute_script("return window.innerHeight")
-    current_position = 0
-    
-    while current_position < total_height:
-        # Variable scroll speed and distance
-        scroll_amount = random.randint(200, 500)
-        scroll_time = random.uniform(500, 1500)  # milliseconds
-        current_position = min(current_position + scroll_amount, total_height)
+    try:
+        # Get initial scroll height
+        total_height = driver.execute_script("return document.body.scrollHeight")
+        viewport_height = driver.execute_script("return window.innerHeight")
+        current_position = 0
         
-        # Smooth scroll with variable speed
-        driver.execute_script(f"""
-            const start = window.pageYOffset;
-            const distance = {current_position} - start;
-            const duration = {scroll_time};
-            let startTime = null;
+        while current_position < total_height:
+            # Variable scroll speed and distance
+            scroll_amount = random.randint(600, 900)
+            current_position = min(current_position + scroll_amount, total_height)
             
-            function animation(currentTime) {{
-                if (startTime === null) startTime = currentTime;
-                const timeElapsed = currentTime - startTime;
-                const progress = Math.min(timeElapsed / duration, 1);
-                
-                window.scrollTo(0, start + distance * easeInOutQuad(progress));
-                
-                if (timeElapsed < duration) {{
-                    requestAnimationFrame(animation);
-                }}
-            }}
+            # Simple smooth scroll
+            driver.execute_script(f"window.scrollTo({{top: {current_position}, behavior: 'smooth'}})")
+
+            # Update total height as it might change due to dynamic loading
+            total_height = driver.execute_script("return document.body.scrollHeight")
             
-            function easeInOutQuad(t) {{
-                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-            }}
-            
-            requestAnimationFrame(animation);
-        """)
-        
-        # Random pauses and micro-movements
-        time.sleep(random.uniform(0.8, 2.0))
-        
-        # Sometimes move mouse randomly
-        if random.random() < 0.3:
-            element = driver.find_element(By.TAG_NAME, "body")
-            action = webdriver.ActionChains(driver)
-            action.move_to_element_with_offset(element, random.randint(0, 800), random.randint(0, 600))
-            action.perform()
-            time.sleep(random.uniform(0.1, 0.3))
+    except Exception as e:
+        logging.error(f"Error during scroll: {str(e)}")
 
 def scrape_products_from_page(driver, output_file):
     """Scrape products from the current page"""
     products = []
+    processed_urls = set()  # Keep track of processed URLs to avoid duplicates
     
     try:
         # Wait for products to be visible and get them
         wait = WebDriverWait(driver, 10)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "li.grid-tile")))
-        product_cards = driver.find_elements(By.CSS_SELECTOR, "li.grid-tile")
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.product.js-product")))
+        product_cards = driver.find_elements(By.CSS_SELECTOR, "div.product.js-product")  # Changed to target the product container
         logging.info(f"Found {len(product_cards)} products on page")
         
         if not product_cards:
@@ -157,54 +131,74 @@ def scrape_products_from_page(driver, output_file):
             
         for card in product_cards:
             try:
+                # Get link first to check for duplicates
+                try:
+                    link = card.find_element(By.CSS_SELECTOR, "div.product-tile a").get_attribute("href")
+                    if link in processed_urls:  # Skip if we've already processed this URL
+                        continue
+                    processed_urls.add(link)
+                except:
+                    logging.warning("Could not get link")
+                    continue
+                
                 # Scroll element into view and wait for images to load
                 driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", card)
                 time.sleep(1)  # Wait for images to start loading
                 
                 # Extract product details
                 try:
-                    name = card.find_element(By.CSS_SELECTOR, ".product-infos h2.product-name").text.strip()
+                    # Get name and material
+                    name_elem = card.find_element(By.CSS_SELECTOR, "p.link.small").text.strip()
+                    try:
+                        material = card.find_element(By.CSS_SELECTOR, "p.text-primary.plp-material").text.strip()
+                        name = f"{name_elem} - {material}"
+                    except:
+                        name = name_elem
                 except:
                     logging.warning("Could not get name")
                     continue
                 
                 try:
-                    price = card.find_element(By.CSS_SELECTOR, ".product-price .price-sales").text.strip()
+                    # Get price - updated selector to match exact structure
+                    price_elem = card.find_element(By.CSS_SELECTOR, "div.price span.value")
+                    price = price_elem.text.strip()
+                    if not price:  # If price is empty, try getting it from the parent
+                        price = price_elem.get_attribute('textContent').strip()
                 except:
                     logging.warning("Could not get price")
                     continue
                 
-                try:
-                    link = card.find_element(By.CSS_SELECTOR, "figure.product-image a.thumb-link").get_attribute("href")
-                except:
-                    logging.warning("Could not get link")
-                    continue
-                
-                # Get images - updated selector and logic
+                # Get images - updated selector and logic for Loro Piana
                 try:
                     images = []
-                    # Wait for images to be present
-                    img_elements = WebDriverWait(card, 5).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".thumb-image-wrap img.thumb-img"))
-                    )
+                    # Get main and hover images
+                    img_elements = card.find_elements(By.CSS_SELECTOR, ".lazy__wrapper img.lazy__img")
                     
                     for img in img_elements:
-                        # Try srcset first
-                        srcset = img.get_attribute("srcset")
-                        if srcset and not srcset.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
-                            # Parse srcset to get highest resolution URL
-                            urls = [url.strip().split(' ')[0] for url in srcset.split(',')]
-                            if urls:
-                                images.append(urls[-1])  # Get highest resolution URL
-                                continue
-                                
-                        # Try data-srcset if srcset is not available
-                        data_srcset = img.get_attribute("data-srcset")
-                        if data_srcset and not data_srcset.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
-                            urls = [url.strip().split(' ')[0] for url in data_srcset.split(',')]
-                            if urls:
-                                images.append(urls[-1])
-                                continue
+                        # Try data-src first (original high-res image)
+                        data_src = img.get_attribute("data-src")
+                        if data_src and not data_src.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                            # Remove _SMALL from URL to get higher resolution
+                            high_res_url = data_src.replace('_SMALL.jpg', '.jpg')
+                            images.append(high_res_url)
+                            continue
+                            
+                        # Try src as fallback
+                        src = img.get_attribute("src")
+                        if src and not src.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                            # Remove _SMALL from URL to get higher resolution
+                            high_res_url = src.replace('_SMALL.jpg', '.jpg')
+                            images.append(high_res_url)
+                    
+                    # Also get color swatch image if available
+                    try:
+                        swatch_img = card.find_element(By.CSS_SELECTOR, ".swatch-plp.color-value img.d-block")
+                        swatch_src = swatch_img.get_attribute("src")
+                        if swatch_src and not swatch_src.endswith('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'):
+                            high_res_url = swatch_src.replace('_SMALL.jpg', '.jpg')
+                            images.append(high_res_url)
+                    except:
+                        pass
                     
                     # Remove duplicates while preserving order
                     images = list(dict.fromkeys(images))
@@ -250,88 +244,140 @@ def scrape_products_from_page(driver, output_file):
         logging.error(f"Error in scrape_products_from_page: {str(e)}")
         return []
 
-def scroll_and_load_all_products(driver, wait):
-    """Scroll until no more products load"""
-    total_products = 0
-    no_new_products_count = 0
-    max_attempts = 3
-    
-    while no_new_products_count < max_attempts:
-        try:
-            # Get current scroll position
-            current_position = driver.execute_script("return window.pageYOffset;")
+def load_all_products(driver, wait):
+    """Load all products by scrolling and clicking the load more button"""
+    try:
+        previous_height = 0
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            # Get current scroll height
+            current_height = driver.execute_script("return document.body.scrollHeight")
             
-            # Scroll in smaller increments
-            for _ in range(4):  # Scroll in 4 steps
-                # Calculate next scroll position (25% of remaining page height each time)
-                scroll_height = driver.execute_script("return document.body.scrollHeight;")
-                next_position = current_position + (scroll_height - current_position) / 4
-                
-                # Smooth scroll to next position
-                driver.execute_script(f"""
-                    window.scrollTo({{
-                        top: {next_position},
-                        behavior: 'smooth'
-                    }});
-                """)
-                time.sleep(1)  # Wait for scroll and images to load
-                current_position = next_position
-            
-            time.sleep(2)  # Additional wait for new products to load
-            
-            # Get current product count
-            current_count = len(driver.find_elements(By.CSS_SELECTOR, "li.grid-tile"))
-            
-            if current_count > total_products:
-                total_products = current_count
-                no_new_products_count = 0
-                logging.info(f"Found {current_count} products")
+            # If height hasn't changed after scrolling, try to find and click the button
+            if current_height == previous_height:
+                try:
+                    # Try to find the "View more" button
+                    load_more_button = wait.until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "button.ais-InfiniteHits-loadMore"))
+                    )
+                    
+                    # Scroll to button
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", load_more_button)
+                    time.sleep(2)
+                    
+                    # Click using JavaScript
+                    driver.execute_script("arguments[0].click();", load_more_button)
+                    logging.info("Clicked 'View more' button")
+                    
+                    # Wait for new products to load
+                    time.sleep(5)
+                    retry_count = 0  # Reset retry count after successful click
+                    
+                except TimeoutException:
+                    retry_count += 1
+                    logging.info(f"No more 'View more' button found (attempt {retry_count}/{max_retries})")
+                    if retry_count >= max_retries:
+                        logging.info("Finished loading products")
+                        break
             else:
-                no_new_products_count += 1
-                logging.info(f"No new products found, attempt {no_new_products_count}/{max_attempts}")
+                retry_count = 0  # Reset retry count if height changed
             
-        except Exception as e:
-            logging.warning(f"Error during scroll: {str(e)}")
-            no_new_products_count += 1
+            # Scroll down
+            human_like_scroll(driver)
+            time.sleep(2)
+            
+            # Update previous height
+            previous_height = current_height
+            
+    except Exception as e:
+        logging.error(f"Error while loading products: {str(e)}")
     
-    logging.info(f"Finished loading products. Total count: {total_products}")
+    # Get final product count
+    total_products = len(driver.find_elements(By.CSS_SELECTOR, "div.product.js-product"))
+    logging.info(f"Finished loading all products. Total count: {total_products}")
     return total_products
 
-def scrape_givenchy(url):
-    """Main function to scrape Givenchy products"""
+def scrape_loropiana(base_url):
+    """Main function to scrape Loro Piana products"""
     products_data = []
     driver = None
+    page = 1
+    max_retries = 3  # Maximum number of retries per page
     
     try:
         driver = setup_driver()
         wait = WebDriverWait(driver, 10)
         
-        try:
-            driver.get(url)
-        except TimeoutException:
-            pass
+        while True:  # Continue until no more products found
+            url = f"{base_url}?page={page}"
+            logging.info(f"Scraping page {page}: {url}")
             
-        time.sleep(5)
-        
-        # Check if we're on the right page
-        if "givenchy.com" not in driver.current_url:
-            logging.error("Redirected away from Givenchy site")
-            return products_data
-        
-        # Load all products by scrolling
-        total_products = scroll_and_load_all_products(driver, wait)
-        logging.info(f"Found {total_products} total products")
-        
-        # Wait for images to load
-        time.sleep(3)
-        
-        # Scrape all products
-        products = scrape_products_from_page(driver, 'givenchy_women_products.csv')
-        if products:
-            products_data.extend(products)
-            logging.info(f"Successfully scraped {len(products)} products")
-        else:
-            logging.error("No products found")
+            retry_count = 0
+            success = False
+            
+            # Retry logic for HTTP2 errors
+            while retry_count < max_retries and not success:
+                try:
+                    # Quit and reinitialize driver on retry
+                    if retry_count > 0:
+                        driver.quit()
+                        driver = setup_driver()
+                        wait = WebDriverWait(driver, 10)
+                    
+                    driver.get(url)
+                    time.sleep(5)  # Wait for page load
+                    
+                    # Check if we're on the right page
+                    if "loropiana.com" not in driver.current_url:
+                        logging.error("Redirected away from Loro Piana site")
+                        return products_data
+                    
+                    # Check if there are products on the page
+                    products_present = wait.until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.product.js-product"))
+                    )
+                    
+                    if not products_present:
+                        logging.info(f"No products found on page {page}, ending pagination")
+                        return products_data
+                        
+                    success = True
+                    
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count == max_retries:
+                        logging.error(f"Failed to load page {page} after {max_retries} attempts: {str(e)}")
+                        return products_data
+                    logging.warning(f"Error on attempt {retry_count}, retrying: {str(e)}")
+                    time.sleep(5)  # Wait before retry
+                    continue
+            
+            if not success:
+                break
+            
+            # Wait for images to load
+            time.sleep(3)
+            
+            # Scroll page to load all images
+            human_like_scroll(driver)
+            time.sleep(2)
+            
+            # Scrape products from current page
+            products = scrape_products_from_page(driver, 'loropiana_women_products.csv')
+            if products:
+                products_data.extend(products)
+                logging.info(f"Successfully scraped {len(products)} products from page {page}")
+            else:
+                logging.warning(f"No products found on page {page}, ending pagination")
+                break
+            
+            # Move to next page
+            page += 1
+            
+            # Add a longer delay between pages
+            time.sleep(random.uniform(8, 12))
             
     except Exception as e:
         logging.error(f"Error during scraping: {str(e)}")
@@ -340,9 +386,10 @@ def scrape_givenchy(url):
         if driver:
             driver.quit()
             
+    logging.info(f"Finished scraping all pages. Total products: {len(products_data)}")
     return products_data
 
 if __name__ == "__main__":
-    givenchy_url = 'https://www.givenchy.com/us/en-US/women/ready-to-wear/?page=16'
-    products = scrape_givenchy(givenchy_url)
+    loropiana_base_url = 'https://us.loropiana.com/en/c/woman'
+    products = scrape_loropiana(loropiana_base_url)
     logging.info(f"Total products scraped: {len(products)}")
